@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, normalizePath, PluginSettingTab, Setting } from "obsidian";
 import type ChaiShuMatrixPlugin from "./main";
 import { ConfirmModal } from "./modals";
 
@@ -29,12 +29,23 @@ export class ChaiShuSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("默认分析维度")
-      .setDesc("新建拆书时自动创建的维度，用逗号分隔（颜色自动分配）")
+      .setDesc("新建拆书时自动创建的维度，用逗号分隔（名为「情绪」的维度自动开启折线画板）")
       .addText((t) => {
         t.setValue(this.plugin.settings.defaultDimensionNames).onChange((v) => {
           this.plugin.settings.defaultDimensionNames = v;
           void this.plugin.saveSettings();
         });
+      });
+
+    new Setting(containerEl)
+      .setName("默认拆书存放位置")
+      .setDesc("新建拆书时的默认归档文件夹（留空 = 库根目录）")
+      .addText((t) => {
+        t.setValue(this.plugin.settings.defaultStoragePath)
+          .onChange((v) => {
+            this.plugin.settings.defaultStoragePath = normalizePath(v);
+            void this.plugin.saveSettings();
+          });
       });
 
     containerEl.createEl("h3", { text: "危险操作" });

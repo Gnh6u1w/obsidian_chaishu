@@ -1,5 +1,5 @@
 import { normalizePath, TFile, Vault } from "obsidian";
-import type { BookData, Dimension } from "./types";
+import type { BookData, Dimension, NodeData, NodeType } from "./types";
 
 /** Generate a collision-resistant id without Node/Electron APIs. */
 export function uid(prefix: string): string {
@@ -12,9 +12,9 @@ export function uid(prefix: string): string {
   );
 }
 
-/** Stable key for a cell: chapter + "_" + dimensionId. */
-export function cellKey(chapter: string, dimensionId: string): string {
-  return chapter + "_" + dimensionId;
+/** Stable key for a cell: nodeId + "_" + dimensionId. */
+export function cellKey(nodeId: string, dimensionId: string): string {
+  return nodeId + "_" + dimensionId;
 }
 
 /** Remove characters that are illegal in file names across macOS/iOS/Windows. */
@@ -39,36 +39,6 @@ function yamlString(s: string): string {
   return str;
 }
 
-export function buildNoteContent(
-  book: BookData,
-  chapter: string,
-  dimension: Dimension,
-  body: string
-): string {
-  const lines = [
-    "---",
-    "维度: " + yamlString(dimension.name),
-    "章节: " + yamlString(chapter),
-    "书名: " + yamlString(bookFolderName(book.bookInfo.title)),
-    "---",
-    "",
-  ];
-  const normalizedBody = body ? body.replace(/\r\n/g, "\n") : "";
-  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "");
-}
-
-/** Vault-relative archive path: 《书名》/第X章/第X章-维度名.md */
-export function buildCellPath(
-  book: BookData,
-  chapter: string,
-  dimension: Dimension
-): string {
-  const folder = bookFolderName(book.bookInfo.title);
-  const chapterFolder = sanitizeFileName(chapter);
-  const noteName = sanitizeFileName(chapter + "-" + dimension.name);
-  return normalizePath(folder + "/" + chapterFolder + "/" + noteName + ".md");
-}
-
 /** Strip a leading YAML frontmatter block, returning the note body. */
 export function stripFrontmatter(content: string): string {
   if (!content.startsWith("---")) return content;
@@ -79,7 +49,229 @@ export function stripFrontmatter(content: string): string {
   return content.slice(after + 1);
 }
 
-/** Recursively ensure a folder path exists inside the vault. */
+// ---------------------------------------------------------------- tree ops
+
+export function createNode(
+  type: NodeType,
+  name: string,
+  children: NodeData[] = []
+): NodeData {
+  return {
+    id: uid(type === "chapter" ? "c" : type === "volume" ? "v" : "u"),
+    type,
+    name: sanitizeFileName(name),
+    summaryFile: "",
+    summaryHasContent: false,
+    children,
+    collapsed: false,
+  };
+}
+
+export function findNode(structure: NodeData[], id: string): NodeData | null {
+  for (const n of structure) {
+    if (n.id === id) return n;
+    const r = findNode(n.children, id);
+    if (r) return r;
+  }
+  return null;
+}
+
+/** Returns the array that directly contains `id`, or null. */
+export function findParentArray(
+  structure: NodeData[],
+  id: string
+): NodeData[] | null {
+  for (const n of structure) {
+    if (n.id === id) return structure;
+    const r = findParentArray(n.children, id);
+    if (r) return r;
+  }
+  return null;
+}
+
+/** Remove a node from its parent array. Returns true when removed. */
+export function removeNode(structure: NodeData[], id: string): boolean {
+  const arr = findParentArray(structure, id);
+  if (!arr) return false;
+  const idx = arr.findIndex((n) => n.id === id);
+  if (idx === -1) return false;
+  arr.splice(idx, 1);
+  return true;
+}
+
+/** True when `ancestor` is `node` itself or an ancestor of `node`. */
+export function isSelfOrDescendant(node: NodeData, ancestor: NodeData): boolean {
+  if (node.id === ancestor.id) return true;
+  for (const c of node.children) {
+    if (isSelfOrDescendant(c, ancestor)) return true;
+  }
+  return false;
+}
+
+export interface NodeContext {
+  volume: NodeData | null;
+  unit: NodeData | null;
+  node: NodeData;
+}
+
+/** Locate a node and its containing volume/unit. */
+export function findNodeContext(
+  structure: NodeData[],
+  id: string
+): NodeContext | null {
+  function walk(
+    nodes: NodeData[],
+    volume: NodeData | null,
+    unit: NodeData | null
+  ): NodeContext | null {
+    for (const n of nodes) {
+      if (n.id === id) return { volume, unit, node: n };
+      let r: NodeContext | null = null;
+      if (n.type === "volume") r = walk(n.children, n, null);
+      else if (n.type === "unit") r = walk(n.children, volume, n);
+      if (r) return r;
+    }
+    return null;
+  }
+  return walk(structure, null, null);
+}
+
+/** Flatten chapter nodes in tree order (depth-first). */
+export function collectChapters(nodes: NodeData[]): NodeData[] {
+  const out: NodeData[] = [];
+  function walk(list: NodeData[]): void {
+    for (const n of list) {
+      if (n.type === "chapter") out.push(n);
+      else walk(n.children);
+    }
+  }
+  walk(nodes);
+  return out;
+}
+
+/** Flatten volume nodes in tree order. */
+export function collectVolumes(nodes: NodeData[]): NodeData[] {
+  const out: NodeData[] = [];
+  function walk(list: NodeData[]): void {
+    for (const n of list) {
+      if (n.type === "volume") {
+        out.push(n);
+        walk(n.children);
+      } else if (n.type === "unit") {
+        walk(n.children);
+      }
+    }
+  }
+  walk(nodes);
+  return out;
+}
+
+/** Flatten unit nodes in tree order. */
+export function collectUnits(nodes: NodeData[]): NodeData[] {
+  const out: NodeData[] = [];
+  function walk(list: NodeData[]): void {
+    for (const n of list) {
+      if (n.type === "unit") {
+        out.push(n);
+        walk(n.children);
+      } else if (n.type === "volume") {
+        walk(n.children);
+      }
+    }
+  }
+  walk(nodes);
+  return out;
+}
+
+// ---------------------------------------------------------------- paths
+
+function storageBase(book: BookData): string {
+  return book.storagePath ? normalizePath(book.storagePath) : "";
+}
+
+function joinVaultPath(base: string, parts: string[]): string {
+  const all = [base, ...parts].filter(Boolean);
+  return normalizePath(all.join("/"));
+}
+
+/** Archive path for a chapter cell note: 存放位置/《书名》/卷/单元/章节-维度.md */
+export function buildChapterPath(
+  book: BookData,
+  chapterId: string,
+  dimensionName: string
+): string {
+  const ctx = findNodeContext(book.structure, chapterId);
+  const chapterName = ctx ? ctx.node.name : "章节";
+  const parts: string[] = [bookFolderName(book.bookInfo.title)];
+  if (ctx?.volume) parts.push(sanitizeFileName(ctx.volume.name));
+  if (ctx?.unit) parts.push(sanitizeFileName(ctx.unit.name));
+  const note = sanitizeFileName(chapterName + "-" + dimensionName) + ".md";
+  parts.push(note);
+  return joinVaultPath(storageBase(book), parts);
+}
+
+/** Archive path for a volume/unit summary note. */
+export function buildSummaryPath(book: BookData, nodeId: string): string {
+  const ctx = findNodeContext(book.structure, nodeId);
+  if (!ctx || ctx.node.type === "chapter") return "";
+  const parts: string[] = [bookFolderName(book.bookInfo.title)];
+  if (ctx.node.type === "volume") {
+    parts.push(sanitizeFileName(ctx.node.name));
+    parts.push("卷总结.md");
+  } else if (ctx.node.type === "unit") {
+    if (ctx.volume) parts.push(sanitizeFileName(ctx.volume.name));
+    parts.push(sanitizeFileName(ctx.node.name));
+    parts.push("单元总结.md");
+  }
+  return joinVaultPath(storageBase(book), parts);
+}
+
+// ---------------------------------------------------------------- content
+
+export function buildChapterContent(
+  book: BookData,
+  chapterId: string,
+  dimension: Dimension,
+  body: string
+): string {
+  const ctx = findNodeContext(book.structure, chapterId);
+  const lines = [
+    "---",
+    "维度: " + yamlString(dimension.name),
+    "章节: " + yamlString(ctx ? ctx.node.name : "章节"),
+  ];
+  if (ctx?.volume) lines.push("所属卷: " + yamlString(ctx.volume.name));
+  if (ctx?.unit) lines.push("所属单元: " + yamlString(ctx.unit.name));
+  lines.push("书名: " + yamlString(bookFolderName(book.bookInfo.title)));
+  lines.push("---", "");
+  const normalizedBody = body ? body.replace(/\r\n/g, "\n") : "";
+  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "");
+}
+
+export function buildSummaryContent(
+  book: BookData,
+  nodeId: string,
+  body: string
+): string {
+  const ctx = findNodeContext(book.structure, nodeId);
+  const node = ctx?.node;
+  const lines = ["---"];
+  if (node?.type === "volume") {
+    lines.push("类型: " + yamlString("卷总结"));
+    lines.push("卷名: " + yamlString(node.name));
+  } else if (node?.type === "unit") {
+    lines.push("类型: " + yamlString("单元总结"));
+    if (ctx?.volume) lines.push("所属卷: " + yamlString(ctx.volume.name));
+    lines.push("单元名: " + yamlString(node.name));
+  }
+  lines.push("书名: " + yamlString(bookFolderName(book.bookInfo.title)));
+  lines.push("---", "");
+  const normalizedBody = body ? body.replace(/\r\n/g, "\n") : "";
+  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "");
+}
+
+// ---------------------------------------------------------------- vault io
+
 export async function ensureFolder(vault: Vault, path: string): Promise<void> {
   const normalized = normalizePath(path);
   if (!normalized || normalized === "/") return;
@@ -95,18 +287,37 @@ export async function ensureFolder(vault: Vault, path: string): Promise<void> {
   }
 }
 
-/** Create (or overwrite) the note for a cell and return the TFile. */
-export async function createCellNote(
+/** Create (or overwrite) the chapter cell note and return the TFile. */
+export async function createChapterNote(
   vault: Vault,
   book: BookData,
-  chapter: string,
+  chapterId: string,
   dimension: Dimension,
   body: string
 ): Promise<TFile> {
-  const filePath = buildCellPath(book, chapter, dimension);
+  const filePath = buildChapterPath(book, chapterId, dimension.name);
   const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
   await ensureFolder(vault, folderPath);
-  const content = buildNoteContent(book, chapter, dimension, body);
+  const content = buildChapterContent(book, chapterId, dimension, body);
+  const existing = vault.getAbstractFileByPath(filePath);
+  if (existing instanceof TFile) {
+    await vault.modify(existing, content);
+    return existing;
+  }
+  return await vault.create(filePath, content);
+}
+
+/** Create (or overwrite) a volume/unit summary note and return the TFile. */
+export async function createSummaryNote(
+  vault: Vault,
+  book: BookData,
+  nodeId: string,
+  body: string
+): Promise<TFile> {
+  const filePath = buildSummaryPath(book, nodeId);
+  const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
+  await ensureFolder(vault, folderPath);
+  const content = buildSummaryContent(book, nodeId, body);
   const existing = vault.getAbstractFileByPath(filePath);
   if (existing instanceof TFile) {
     await vault.modify(existing, content);
