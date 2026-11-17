@@ -2132,16 +2132,17 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
     for (const v of this.views) v.refresh();
   }
   async activateView() {
+    var _a;
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);
-    let leaf = leaves[0];
+    let leaf = (_a = leaves[0]) != null ? _a : null;
     if (!leaf) {
-      const right = this.app.workspace.getRightLeaf(false);
-      if (right) {
-        await right.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
-        leaf = right;
-      }
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
     }
-    if (leaf) this.app.workspace.revealLeaf(leaf);
+    if (leaf) {
+      await this.app.workspace.revealLeaf(leaf);
+      this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    }
   }
   getOpenView() {
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);

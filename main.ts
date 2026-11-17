@@ -87,15 +87,16 @@ export default class ChaiShuMatrixPlugin extends Plugin {
 
   async activateView(): Promise<void> {
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);
-    let leaf = leaves[0];
+    let leaf: WorkspaceLeaf | null = leaves[0] ?? null;
     if (!leaf) {
-      const right = this.app.workspace.getRightLeaf(false);
-      if (right) {
-        await right.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
-        leaf = right;
-      }
+      // Open as a standard main-workspace tab (not the right sidebar).
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
     }
-    if (leaf) this.app.workspace.revealLeaf(leaf);
+    if (leaf) {
+      await this.app.workspace.revealLeaf(leaf);
+      this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    }
   }
 
   getOpenView(): ChaiShuMatrixView | null {
