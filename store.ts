@@ -1,4 +1,4 @@
-import { normalizePath, parseYaml, TFile, Vault } from "obsidian";
+import { normalizePath, TFile, Vault } from "obsidian";
 import type { BookData, Dimension, NodeData, NodeType } from "./types";
 import { DEFAULT_Y_AXIS_LABELS, EMOTION_LEVELS } from "./types";
 
@@ -65,7 +65,6 @@ export function createNode(
     summaryHasContent: false,
     children,
     collapsed: false,
-    emotionFile: "",
     emotionData: [],
   };
 }
@@ -303,95 +302,6 @@ export async function createChapterNote(
   const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
   await ensureFolder(vault, folderPath);
   const content = buildChapterContent(book, chapterId, dimension, body);
-  const existing = vault.getAbstractFileByPath(filePath);
-  if (existing instanceof TFile) {
-    await vault.modify(existing, content);
-    return existing;
-  }
-  return await vault.create(filePath, content);
-}
-
-// ------------------------------------------------------------- emotion note
-
-/** Archive path for a chapter emotion-line note: 存放位置/《书名》/卷/单元/章节-维度折线.md */
-export function buildEmotionPath(
-  book: BookData,
-  chapterId: string,
-  dimensionName: string
-): string {
-  const ctx = findNodeContext(book.structure, chapterId);
-  const chapterName = ctx ? ctx.node.name : "章节";
-  const parts: string[] = [bookFolderName(book.bookInfo.title)];
-  if (ctx?.volume) parts.push(sanitizeFileName(ctx.volume.name));
-  if (ctx?.unit) parts.push(sanitizeFileName(ctx.unit.name));
-  const note = sanitizeFileName(chapterName + "-" + dimensionName + "折线") + ".md";
-  parts.push(note);
-  return joinVaultPath(storageBase(book), parts);
-}
-
-export function buildEmotionContent(
-  book: BookData,
-  chapterId: string,
-  dimensionName: string,
-  data: number[]
-): string {
-  const ctx = findNodeContext(book.structure, chapterId);
-  const lines = [
-    "---",
-    "type: " + yamlString("拆书矩阵"),
-    "book: " + yamlString(bookFolderName(book.bookInfo.title)),
-  ];
-  if (ctx?.volume) lines.push("volume: " + yamlString(ctx.volume.name));
-  if (ctx?.unit) lines.push("unit: " + yamlString(ctx.unit.name));
-  lines.push("chapter: " + yamlString(ctx ? ctx.node.name : "章节"));
-  lines.push("dimension: " + yamlString(dimensionName));
-  lines.push("emotionData: [" + data.map((v) => String(v)).join(", ") + "]");
-  lines.push("---", "");
-  lines.push("> 在此通过 Obsidian「属性」面板编辑 `emotionData`（1–5 的情绪值，用逗号分隔），也可在正文中用 Mermaid / Excalidraw 绘制并手动同步数值。", "");
-  return lines.join("\n");
-}
-
-/** Extract the raw frontmatter block (between the first two `---` lines), or "". */
-export function extractFrontmatter(content: string): string {
-  if (!content.startsWith("---")) return "";
-  const firstEnd = content.indexOf("\n---", 3);
-  if (firstEnd === -1) return "";
-  return content.slice(4, firstEnd);
-}
-
-/** Parse the `emotionData` number array from a note's YAML frontmatter. */
-export function parseEmotionData(content: string): number[] {
-  const fm = extractFrontmatter(content);
-  if (!fm) return [];
-  try {
-    const obj = parseYaml(fm) as Record<string, unknown> | null;
-    const d = obj?.emotionData;
-    if (Array.isArray(d)) {
-      const out: number[] = [];
-      for (const v of d) {
-        const n = Math.round(Number(v));
-        if (Number.isFinite(n)) out.push(Math.max(1, Math.min(5, n)));
-      }
-      return out;
-    }
-  } catch (e) {
-    /* ignore parse errors */
-  }
-  return [];
-}
-
-/** Create (or overwrite) the chapter emotion-line note and return the TFile. */
-export async function createEmotionNote(
-  vault: Vault,
-  book: BookData,
-  chapterId: string,
-  dimensionName: string,
-  data: number[] = [3, 3, 3, 3, 3]
-): Promise<TFile> {
-  const filePath = buildEmotionPath(book, chapterId, dimensionName);
-  const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
-  await ensureFolder(vault, folderPath);
-  const content = buildEmotionContent(book, chapterId, dimensionName, data);
   const existing = vault.getAbstractFileByPath(filePath);
   if (existing instanceof TFile) {
     await vault.modify(existing, content);

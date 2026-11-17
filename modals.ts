@@ -15,9 +15,26 @@ import {
   DIMENSION_COLOR_NAMES,
   DIMENSION_COLORS,
   Dimension,
+  EMOTION_LEVELS,
   ImportRequest,
 } from "./types";
 import { ensureFolder, normalizeYAxisLabels, sanitizeFileName } from "./store";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// Emotion editor canvas layout (pixels in the SVG coordinate system).
+const EMO_PAD_LEFT = 44;
+const EMO_PAD_RIGHT = 12;
+const EMO_PAD_TOP = 16;
+const EMO_PAD_BOTTOM = 30;
+const EMO_HEIGHT = 250;
+const EMO_PLOT_W = 520;
+
+function makeSvgEl(tag: string, attrs: Record<string, string>): SVGElement {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
 
 export class BookCreateModal extends Modal {
   private title = "";
@@ -663,7 +680,254 @@ export class ImportModal extends Modal {
   }
 }
 
-/** Tree selector for moving a node (used instead of drag on mobile). */
+/** In-place emotion line editor: click/drag to draw, no external note. */
+export class EmotionEditorModal extends Modal {
+  private data: number[];
+  private svgEl: SVGSVGElement | null = null;
+  private polyEl: SVGElement | null = null;
+  private pointsEl: SVGElement | null = null;
+  private eraser = false;
+  private dragging = false;
+  private dragIndex = -1;
+
+  constructor(
+    app: App,
+    private opts: {
+      title: string;
+      color: string;
+      yAxisLabels: string[];
+      initial: number[];
+      onSave: (data: number[]) => void;
+    }
+  ) {
+    super(app);
+    this.data = (opts.initial && opts.initial.length ? opts.initial : [3, 3, 3, 3, 3]).slice();
+  }
+
+  onOpen(): void {
+    this.render();
+  }
+
+  private yPx(level: number): number {
+    const plotH = EMO_HEIGHT - EMO_PAD_TOP - EMO_PAD_BOTTOM;
+    return EMO_PAD_TOP + ((EMOTION_LEVELS - level) / (EMOTION_LEVELS - 1)) * plotH;
+  }
+
+  private xPx(i: number): number {
+    const n = this.data.length;
+    if (n <= 1) return EMO_PAD_LEFT + EMO_PLOT_W / 2;
+    return EMO_PAD_LEFT + (i / (n - 1)) * EMO_PLOT_W;
+  }
+
+  private render(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-modal", "chs-emotion-modal");
+    contentEl.createEl("h2", { text: this.opts.title });
+
+    this.buildCanvas(contentEl);
+
+    const controls = contentEl.createDiv("chs-emotion-controls");
+    const addBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm", text: "＋ 添加点" });
+    addBtn.addEventListener("click", () => {
+      this.data.push(3);
+      this.render();
+    });
+    const delBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm", text: "－ 删除末点" });
+    delBtn.addEventListener("click", () => {
+      if (this.data.length > 1) this.data.pop();
+      this.render();
+    });
+    const flatBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm", text: "一键打平" });
+    flatBtn.addEventListener("click", () => {
+      this.data = [3, 3, 3, 3, 3];
+      this.render();
+    });
+    const clearBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm chs-btn-ghost", text: "清除" });
+    clearBtn.addEventListener("click", () => {
+      this.data = [];
+      this.render();
+    });
+    const eraserBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm", text: "🧽 橡皮擦" });
+    eraserBtn.addEventListener("click", () => {
+      this.eraser = !this.eraser;
+      eraserBtn.toggleClass("chs-btn-primary", this.eraser);
+    });
+
+    const hint = contentEl.createDiv("chs-emotion-hint");
+    hint.setText("点击画布添加点 · 拖拽圆点修改高低 · 橡皮擦模式点击圆点可删除");
+
+    const footer = contentEl.createDiv("chs-modal-actions");
+    new ButtonComponent(footer).setButtonText("取消").onClick(() => this.close());
+    new ButtonComponent(footer)
+      .setButtonText("保存")
+      .setCta()
+      .onClick(() => {
+        this.opts.onSave(this.data.slice());
+        this.close();
+      });
+  }
+
+  private buildCanvas(parent: HTMLElement): void {
+    const labels = this.opts.yAxisLabels ?? DEFAULT_Y_AXIS_LABELS;
+    const plotH = EMO_HEIGHT - EMO_PAD_TOP - EMO_PAD_BOTTOM;
+    const totalW = EMO_PAD_LEFT + EMO_PLOT_W + EMO_PAD_RIGHT;
+
+    const scroll = parent.createDiv("chs-emotion-scroll");
+    const svg = makeSvgEl("svg", {
+      width: String(totalW),
+      height: String(EMO_HEIGHT),
+    });
+    svg.setAttribute("class", "chs-emotion-canvas");
+    svg.style.touchAction = "none";
+    svg.style.cursor = "crosshair";
+
+    for (let level = 1; level <= EMOTION_LEVELS; level++) {
+      const y = this.yPx(level);
+      const isBaseline = level === 3;
+      const line = makeSvgEl("line", {
+        x1: String(EMO_PAD_LEFT),
+        x2: String(EMO_PAD_LEFT + EMO_PLOT_W),
+        y1: String(y),
+        y2: String(y),
+      });
+      line.style.stroke = "var(--background-modifier-border)";
+      line.setAttribute("stroke-width", isBaseline ? "1.5" : "1");
+      if (isBaseline) line.setAttribute("stroke-dasharray", "4 3");
+      svg.appendChild(line);
+
+      const lbl = makeSvgEl("text", {
+        x: String(EMO_PAD_LEFT - 8),
+        y: String(y + 4),
+        "text-anchor": "end",
+      });
+      lbl.textContent = labels[level - 1] ?? String(level);
+      lbl.style.fill = isBaseline ? "var(--text-normal)" : "var(--text-muted)";
+      lbl.setAttribute("font-size", "11");
+      if (isBaseline) lbl.setAttribute("font-weight", "600");
+      svg.appendChild(lbl);
+    }
+
+    const xAxis = makeSvgEl("line", {
+      x1: String(EMO_PAD_LEFT),
+      x2: String(EMO_PAD_LEFT + EMO_PLOT_W),
+      y1: String(EMO_PAD_TOP + plotH),
+      y2: String(EMO_PAD_TOP + plotH),
+    });
+    xAxis.style.stroke = "var(--background-modifier-border)";
+    xAxis.setAttribute("stroke-width", "1");
+    svg.appendChild(xAxis);
+
+    const poly = makeSvgEl("polyline", {
+      points: "",
+      fill: "none",
+      "stroke-width": "2.5",
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round",
+    });
+    poly.setAttribute("stroke", this.opts.color);
+    svg.appendChild(poly);
+    this.polyEl = poly;
+
+    const pointsG = makeSvgEl("g", {});
+    svg.appendChild(pointsG);
+    this.pointsEl = pointsG;
+
+    svg.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      this.onPointer(e as PointerEvent, true);
+    });
+    svg.addEventListener("pointermove", (e) => {
+      if (this.dragging) this.onPointer(e as PointerEvent, false);
+    });
+    const stop = () => {
+      this.dragging = false;
+      this.dragIndex = -1;
+    };
+    svg.addEventListener("pointerup", stop);
+    svg.addEventListener("pointerleave", stop);
+
+    scroll.appendChild(svg);
+    this.svgEl = svg as SVGSVGElement;
+    this.updateLine();
+  }
+
+  private onPointer(e: PointerEvent, down: boolean): void {
+    const svg = this.svgEl;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const level = this.levelAt(py);
+
+    if (down) {
+      this.dragging = true;
+      const idx = this.nearestPoint(px, py);
+      if (idx !== -1) {
+        if (this.eraser) {
+          this.data.splice(idx, 1);
+          this.dragging = false;
+          this.render();
+          return;
+        }
+        this.dragIndex = idx;
+        this.data[idx] = level;
+      } else if (!this.eraser) {
+        const n = this.data.length;
+        const rel = Math.max(0, Math.min(1, (px - EMO_PAD_LEFT) / EMO_PLOT_W));
+        const insertAt = n === 0 ? 0 : Math.max(0, Math.min(n, Math.round(rel * n)));
+        this.data.splice(insertAt, 0, level);
+        this.dragIndex = insertAt;
+      } else {
+        this.dragging = false;
+      }
+    }
+
+    if (this.dragging && this.dragIndex >= 0 && this.dragIndex < this.data.length) {
+      this.data[this.dragIndex] = level;
+    }
+    this.updateLine();
+  }
+
+  private levelAt(py: number): number {
+    const plotH = EMO_HEIGHT - EMO_PAD_TOP - EMO_PAD_BOTTOM;
+    const raw = EMOTION_LEVELS - ((py - EMO_PAD_TOP) / plotH) * (EMOTION_LEVELS - 1);
+    return Math.max(1, Math.min(EMOTION_LEVELS, Math.round(raw)));
+  }
+
+  private nearestPoint(px: number, py: number): number {
+    const n = this.data.length;
+    for (let i = 0; i < n; i++) {
+      if (Math.abs(this.xPx(i) - px) < 14 && Math.abs(this.yPx(this.data[i]) - py) < 14) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private updateLine(): void {
+    if (!this.polyEl || !this.pointsEl) return;
+    const n = this.data.length;
+    const pts = this.data.map((v, i) => this.xPx(i) + "," + this.yPx(v));
+    this.polyEl.setAttribute("points", pts.join(" "));
+    this.polyEl.setAttribute("stroke", this.opts.color);
+
+    while (this.pointsEl.firstChild) this.pointsEl.removeChild(this.pointsEl.firstChild);
+    for (let i = 0; i < n; i++) {
+      const c = makeSvgEl("circle", {
+        cx: String(this.xPx(i)),
+        cy: String(this.yPx(this.data[i])),
+        r: "5",
+      });
+      c.setAttribute("fill", this.opts.color);
+      this.pointsEl.appendChild(c);
+    }
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
 export class MoveNodeModal extends Modal {
   constructor(
     app: App,

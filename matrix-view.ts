@@ -19,20 +19,17 @@ import {
 } from "./types";
 import {
   buildChapterPath,
-  buildEmotionPath,
   buildSummaryPath,
   cellKey,
   collectChapters,
   collectUnits,
   collectVolumes,
   createChapterNote,
-  createEmotionNote,
   createNode,
   createSummaryNote,
   findNode,
   findParentArray,
   isSelfOrDescendant,
-  parseEmotionData,
   removeNode,
   sanitizeFileName,
   stripFrontmatter,
@@ -43,6 +40,7 @@ import {
   CellEditModal,
   ConfirmModal,
   DimensionModal,
+  EmotionEditorModal,
   ImportModal,
   MoveNodeModal,
   StoragePathModal,
@@ -569,7 +567,7 @@ export class ChaiShuMatrixView extends ItemView {
     td.empty();
     td.removeClass("is-filled", "is-empty");
     const data = node.emotionData ?? [];
-    if (node.emotionFile && data.length >= 2) {
+    if (data.length >= 2) {
       td.addClass("is-filled");
       const body = td.createDiv("chs-cell-body");
       renderSparkline(body, data, dim.color, 140, 44);
@@ -712,7 +710,7 @@ export class ChaiShuMatrixView extends ItemView {
 
     const emotionCell = t.closest("[data-emotion-cell]") as HTMLElement | null;
     if (emotionCell) {
-      void this.openEmotionNote(emotionCell.dataset.emotionCell as string);
+      this.openEmotionEditor(emotionCell.dataset.emotionCell as string);
       return;
     }
 
@@ -732,7 +730,7 @@ export class ChaiShuMatrixView extends ItemView {
     if (chartBtn) {
       const id = chartBtn.dataset.chartNodeId as string;
       const n = this.book ? findNode(this.book.structure, id) : null;
-      if (n?.type === "chapter") void this.openEmotionNote(id);
+      if (n?.type === "chapter") this.openEmotionEditor(id);
       return;
     }
 
@@ -822,7 +820,7 @@ export class ChaiShuMatrixView extends ItemView {
     }
   }
 
-  private async openEmotionNote(chapterId: string): Promise<void> {
+  private openEmotionEditor(chapterId: string): void {
     const book = this.book;
     if (!book) return;
     const chapter = findNode(book.structure, chapterId);
@@ -832,25 +830,17 @@ export class ChaiShuMatrixView extends ItemView {
       new Notice("请先添加开启「情绪折线」的维度");
       return;
     }
-
-    const path = buildEmotionPath(book, chapterId, dim.name);
-    let file: TFile;
-    const existing = this.app.vault.getAbstractFileByPath(path);
-    if (existing instanceof TFile) {
-      file = existing;
-      try {
-        chapter.emotionData = parseEmotionData(await this.app.vault.cachedRead(file));
-      } catch (e) {
-        /* ignore */
-      }
-    } else {
-      file = await createEmotionNote(this.app.vault, book, chapterId, dim.name, [3, 3, 3, 3, 3]);
-      chapter.emotionFile = file.path;
-      chapter.emotionData = [3, 3, 3, 3, 3];
-      await this.plugin.saveSettings();
-      this.renderMatrix();
-    }
-    await this.app.workspace.getLeaf(false).openFile(file);
+    new EmotionEditorModal(this.app, {
+      title: chapter.name + " · " + dim.name + "折线",
+      color: dim.color,
+      yAxisLabels: dim.yAxisLabels,
+      initial: chapter.emotionData ?? [],
+      onSave: async (data) => {
+        chapter.emotionData = data;
+        await this.plugin.saveSettings();
+        this.renderMatrix();
+      },
+    }).open();
   }
 
   private async openCellEditor(key: string, chapterId: string, dimId: string): Promise<void> {
@@ -1072,7 +1062,7 @@ export class ChaiShuMatrixView extends ItemView {
     }
     if (node.type === "chapter") {
       menu.addItem((i) =>
-        i.setTitle("编辑情绪折线").setIcon("activity").onClick(() => void this.openEmotionNote(nodeId))
+        i.setTitle("编辑情绪折线").setIcon("activity").onClick(() => this.openEmotionEditor(nodeId))
       );
     }
     menu.addItem((i) =>
@@ -1252,7 +1242,6 @@ export class ChaiShuMatrixView extends ItemView {
     if (!book) return;
 
     const chapters = node.type === "chapter" ? [node] : collectChapters([node]);
-    const chartDim = book.dimensions.find((d) => d.isChart);
     for (const ch of chapters) {
       for (const dim of book.dimensions) {
         if (dim.isChart) continue;
@@ -1270,20 +1259,6 @@ export class ChaiShuMatrixView extends ItemView {
           }
         }
         cell.filePath = newPath;
-      }
-      if (chartDim && ch.emotionFile) {
-        const newEmotion = buildEmotionPath(book, ch.id, chartDim.name);
-        if (newEmotion !== ch.emotionFile) {
-          const f = this.app.vault.getAbstractFileByPath(ch.emotionFile);
-          if (f instanceof TFile) {
-            try {
-              await this.app.fileManager.renameFile(f, newEmotion);
-            } catch (e) {
-              /* skip */
-            }
-          }
-          ch.emotionFile = newEmotion;
-        }
       }
     }
 
@@ -1581,7 +1556,7 @@ export class ChaiShuMatrixView extends ItemView {
     for (const ch of collectChapters(book.structure)) {
       for (const d of book.dimensions) {
         if (d.isChart) {
-          if (ch.emotionFile && (ch.emotionData?.length ?? 0) >= 2) n++;
+          if ((ch.emotionData?.length ?? 0) >= 2) n++;
           continue;
         }
         const c = book.cells[cellKey(ch.id, d.id)];

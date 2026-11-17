@@ -18,7 +18,6 @@ import {
   collectChapters,
   createNode,
   normalizeYAxisLabels,
-  parseEmotionData,
   sanitizeFileName,
   stripFrontmatter,
   uid,
@@ -67,11 +66,6 @@ export default class ChaiShuMatrixPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         void this.onVaultDelete(file);
-      })
-    );
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => {
-        void this.onVaultModify(file);
       })
     );
   }
@@ -256,7 +250,6 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         ? n.children.map((c: any) => this.normalizeNode(c))
         : [],
       collapsed: !!n.collapsed,
-      emotionFile: typeof n.emotionFile === "string" ? n.emotionFile : "",
       emotionData: Array.isArray(n.emotionData)
         ? (n.emotionData as unknown[]).map((v) => Number(v)).filter((v) => Number.isFinite(v))
         : [],
@@ -293,10 +286,6 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           node.summaryFile = file.path;
           changed = true;
         }
-        if (node.emotionFile === oldPath) {
-          node.emotionFile = file.path;
-          changed = true;
-        }
       }
     }
     if (changed) {
@@ -322,33 +311,6 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           node.summaryFile = "";
           node.summaryHasContent = false;
           changed = true;
-        }
-        if (node.emotionFile === file.path) {
-          node.emotionFile = "";
-          node.emotionData = [];
-          changed = true;
-        }
-      }
-    }
-    if (changed) {
-      await this.saveSettings();
-      this.notifyViews();
-    }
-  }
-
-  private async onVaultModify(file: TAbstractFile): Promise<void> {
-    if (!(file instanceof TFile)) return;
-    let changed = false;
-    for (const book of this.settings.books) {
-      for (const ch of collectChapters(book.structure)) {
-        if (ch.emotionFile === file.path) {
-          try {
-            const content = await this.app.vault.cachedRead(file);
-            ch.emotionData = parseEmotionData(content);
-            changed = true;
-          } catch (e) {
-            /* ignore read errors */
-          }
         }
       }
     }

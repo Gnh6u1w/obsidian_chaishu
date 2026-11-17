@@ -759,6 +759,38 @@ tr.chs-drop-root {
   color: var(--text-muted);
 }
 
+/* Emotion editor modal */
+.chs-emotion-modal {
+  width: min(96vw, 680px);
+  max-height: 90vh;
+}
+
+.chs-emotion-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  padding: 4px;
+}
+
+.chs-emotion-canvas {
+  display: block;
+  max-width: none;
+}
+
+.chs-emotion-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.chs-emotion-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
 /* -------------------------------------------------------- mobile / narrow */
 @media (max-width: 640px) {
   .chs-content {

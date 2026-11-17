@@ -119,7 +119,6 @@ function createNode(type, name, children = []) {
     summaryHasContent: false,
     children,
     collapsed: false,
-    emotionFile: "",
     emotionData: []
   };
 }
@@ -297,68 +296,6 @@ async function createChapterNote(vault, book, chapterId, dimension, body) {
   }
   return await vault.create(filePath, content);
 }
-function buildEmotionPath(book, chapterId, dimensionName) {
-  const ctx = findNodeContext(book.structure, chapterId);
-  const chapterName = ctx ? ctx.node.name : "\u7AE0\u8282";
-  const parts = [bookFolderName(book.bookInfo.title)];
-  if (ctx == null ? void 0 : ctx.volume) parts.push(sanitizeFileName(ctx.volume.name));
-  if (ctx == null ? void 0 : ctx.unit) parts.push(sanitizeFileName(ctx.unit.name));
-  const note = sanitizeFileName(chapterName + "-" + dimensionName + "\u6298\u7EBF") + ".md";
-  parts.push(note);
-  return joinVaultPath(storageBase(book), parts);
-}
-function buildEmotionContent(book, chapterId, dimensionName, data) {
-  const ctx = findNodeContext(book.structure, chapterId);
-  const lines = [
-    "---",
-    "type: " + yamlString("\u62C6\u4E66\u77E9\u9635"),
-    "book: " + yamlString(bookFolderName(book.bookInfo.title))
-  ];
-  if (ctx == null ? void 0 : ctx.volume) lines.push("volume: " + yamlString(ctx.volume.name));
-  if (ctx == null ? void 0 : ctx.unit) lines.push("unit: " + yamlString(ctx.unit.name));
-  lines.push("chapter: " + yamlString(ctx ? ctx.node.name : "\u7AE0\u8282"));
-  lines.push("dimension: " + yamlString(dimensionName));
-  lines.push("emotionData: [" + data.map((v) => String(v)).join(", ") + "]");
-  lines.push("---", "");
-  lines.push("> \u5728\u6B64\u901A\u8FC7 Obsidian\u300C\u5C5E\u6027\u300D\u9762\u677F\u7F16\u8F91 `emotionData`\uFF081\u20135 \u7684\u60C5\u7EEA\u503C\uFF0C\u7528\u9017\u53F7\u5206\u9694\uFF09\uFF0C\u4E5F\u53EF\u5728\u6B63\u6587\u4E2D\u7528 Mermaid / Excalidraw \u7ED8\u5236\u5E76\u624B\u52A8\u540C\u6B65\u6570\u503C\u3002", "");
-  return lines.join("\n");
-}
-function extractFrontmatter(content) {
-  if (!content.startsWith("---")) return "";
-  const firstEnd = content.indexOf("\n---", 3);
-  if (firstEnd === -1) return "";
-  return content.slice(4, firstEnd);
-}
-function parseEmotionData(content) {
-  const fm = extractFrontmatter(content);
-  if (!fm) return [];
-  try {
-    const obj = (0, import_obsidian.parseYaml)(fm);
-    const d = obj == null ? void 0 : obj.emotionData;
-    if (Array.isArray(d)) {
-      const out = [];
-      for (const v of d) {
-        const n = Math.round(Number(v));
-        if (Number.isFinite(n)) out.push(Math.max(1, Math.min(5, n)));
-      }
-      return out;
-    }
-  } catch (e) {
-  }
-  return [];
-}
-async function createEmotionNote(vault, book, chapterId, dimensionName, data = [3, 3, 3, 3, 3]) {
-  const filePath = buildEmotionPath(book, chapterId, dimensionName);
-  const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
-  await ensureFolder(vault, folderPath);
-  const content = buildEmotionContent(book, chapterId, dimensionName, data);
-  const existing = vault.getAbstractFileByPath(filePath);
-  if (existing instanceof import_obsidian.TFile) {
-    await vault.modify(existing, content);
-    return existing;
-  }
-  return await vault.create(filePath, content);
-}
 function normalizeYAxisLabels(labels) {
   const out = [];
   const src = Array.isArray(labels) ? labels : [];
@@ -383,6 +320,18 @@ async function createSummaryNote(vault, book, nodeId, body) {
 
 // modals.ts
 var import_obsidian2 = require("obsidian");
+var SVG_NS = "http://www.w3.org/2000/svg";
+var EMO_PAD_LEFT = 44;
+var EMO_PAD_RIGHT = 12;
+var EMO_PAD_TOP = 16;
+var EMO_PAD_BOTTOM = 30;
+var EMO_HEIGHT = 250;
+var EMO_PLOT_W = 520;
+function makeSvgEl(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
 var BookCreateModal = class extends import_obsidian2.Modal {
   constructor(app, onSubmit) {
     super(app);
@@ -852,6 +801,216 @@ var ImportModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
 };
+var EmotionEditorModal = class extends import_obsidian2.Modal {
+  constructor(app, opts) {
+    super(app);
+    this.opts = opts;
+    this.svgEl = null;
+    this.polyEl = null;
+    this.pointsEl = null;
+    this.eraser = false;
+    this.dragging = false;
+    this.dragIndex = -1;
+    this.data = (opts.initial && opts.initial.length ? opts.initial : [3, 3, 3, 3, 3]).slice();
+  }
+  onOpen() {
+    this.render();
+  }
+  yPx(level) {
+    const plotH = EMO_HEIGHT - EMO_PAD_TOP - EMO_PAD_BOTTOM;
+    return EMO_PAD_TOP + (EMOTION_LEVELS - level) / (EMOTION_LEVELS - 1) * plotH;
+  }
+  xPx(i) {
+    const n = this.data.length;
+    if (n <= 1) return EMO_PAD_LEFT + EMO_PLOT_W / 2;
+    return EMO_PAD_LEFT + i / (n - 1) * EMO_PLOT_W;
+  }
+  render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-modal", "chs-emotion-modal");
+    contentEl.createEl("h2", { text: this.opts.title });
+    this.buildCanvas(contentEl);
+    const controls = contentEl.createDiv("chs-emotion-controls");
+    const addBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm", text: "\uFF0B \u6DFB\u52A0\u70B9" });
+    addBtn.addEventListener("click", () => {
+      this.data.push(3);
+      this.render();
+    });
+    const delBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm", text: "\uFF0D \u5220\u9664\u672B\u70B9" });
+    delBtn.addEventListener("click", () => {
+      if (this.data.length > 1) this.data.pop();
+      this.render();
+    });
+    const flatBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm", text: "\u4E00\u952E\u6253\u5E73" });
+    flatBtn.addEventListener("click", () => {
+      this.data = [3, 3, 3, 3, 3];
+      this.render();
+    });
+    const clearBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm chs-btn-ghost", text: "\u6E05\u9664" });
+    clearBtn.addEventListener("click", () => {
+      this.data = [];
+      this.render();
+    });
+    const eraserBtn = controls.createEl("button", { cls: "chs-btn chs-btn-sm", text: "\u{1F9FD} \u6A61\u76AE\u64E6" });
+    eraserBtn.addEventListener("click", () => {
+      this.eraser = !this.eraser;
+      eraserBtn.toggleClass("chs-btn-primary", this.eraser);
+    });
+    const hint = contentEl.createDiv("chs-emotion-hint");
+    hint.setText("\u70B9\u51FB\u753B\u5E03\u6DFB\u52A0\u70B9 \xB7 \u62D6\u62FD\u5706\u70B9\u4FEE\u6539\u9AD8\u4F4E \xB7 \u6A61\u76AE\u64E6\u6A21\u5F0F\u70B9\u51FB\u5706\u70B9\u53EF\u5220\u9664");
+    const footer = contentEl.createDiv("chs-modal-actions");
+    new import_obsidian2.ButtonComponent(footer).setButtonText("\u53D6\u6D88").onClick(() => this.close());
+    new import_obsidian2.ButtonComponent(footer).setButtonText("\u4FDD\u5B58").setCta().onClick(() => {
+      this.opts.onSave(this.data.slice());
+      this.close();
+    });
+  }
+  buildCanvas(parent) {
+    var _a, _b;
+    const labels = (_a = this.opts.yAxisLabels) != null ? _a : DEFAULT_Y_AXIS_LABELS;
+    const plotH = EMO_HEIGHT - EMO_PAD_TOP - EMO_PAD_BOTTOM;
+    const totalW = EMO_PAD_LEFT + EMO_PLOT_W + EMO_PAD_RIGHT;
+    const scroll = parent.createDiv("chs-emotion-scroll");
+    const svg = makeSvgEl("svg", {
+      width: String(totalW),
+      height: String(EMO_HEIGHT)
+    });
+    svg.setAttribute("class", "chs-emotion-canvas");
+    svg.style.touchAction = "none";
+    svg.style.cursor = "crosshair";
+    for (let level = 1; level <= EMOTION_LEVELS; level++) {
+      const y = this.yPx(level);
+      const isBaseline = level === 3;
+      const line = makeSvgEl("line", {
+        x1: String(EMO_PAD_LEFT),
+        x2: String(EMO_PAD_LEFT + EMO_PLOT_W),
+        y1: String(y),
+        y2: String(y)
+      });
+      line.style.stroke = "var(--background-modifier-border)";
+      line.setAttribute("stroke-width", isBaseline ? "1.5" : "1");
+      if (isBaseline) line.setAttribute("stroke-dasharray", "4 3");
+      svg.appendChild(line);
+      const lbl = makeSvgEl("text", {
+        x: String(EMO_PAD_LEFT - 8),
+        y: String(y + 4),
+        "text-anchor": "end"
+      });
+      lbl.textContent = (_b = labels[level - 1]) != null ? _b : String(level);
+      lbl.style.fill = isBaseline ? "var(--text-normal)" : "var(--text-muted)";
+      lbl.setAttribute("font-size", "11");
+      if (isBaseline) lbl.setAttribute("font-weight", "600");
+      svg.appendChild(lbl);
+    }
+    const xAxis = makeSvgEl("line", {
+      x1: String(EMO_PAD_LEFT),
+      x2: String(EMO_PAD_LEFT + EMO_PLOT_W),
+      y1: String(EMO_PAD_TOP + plotH),
+      y2: String(EMO_PAD_TOP + plotH)
+    });
+    xAxis.style.stroke = "var(--background-modifier-border)";
+    xAxis.setAttribute("stroke-width", "1");
+    svg.appendChild(xAxis);
+    const poly = makeSvgEl("polyline", {
+      points: "",
+      fill: "none",
+      "stroke-width": "2.5",
+      "stroke-linejoin": "round",
+      "stroke-linecap": "round"
+    });
+    poly.setAttribute("stroke", this.opts.color);
+    svg.appendChild(poly);
+    this.polyEl = poly;
+    const pointsG = makeSvgEl("g", {});
+    svg.appendChild(pointsG);
+    this.pointsEl = pointsG;
+    svg.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      this.onPointer(e, true);
+    });
+    svg.addEventListener("pointermove", (e) => {
+      if (this.dragging) this.onPointer(e, false);
+    });
+    const stop = () => {
+      this.dragging = false;
+      this.dragIndex = -1;
+    };
+    svg.addEventListener("pointerup", stop);
+    svg.addEventListener("pointerleave", stop);
+    scroll.appendChild(svg);
+    this.svgEl = svg;
+    this.updateLine();
+  }
+  onPointer(e, down) {
+    const svg = this.svgEl;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const level = this.levelAt(py);
+    if (down) {
+      this.dragging = true;
+      const idx = this.nearestPoint(px, py);
+      if (idx !== -1) {
+        if (this.eraser) {
+          this.data.splice(idx, 1);
+          this.dragging = false;
+          this.render();
+          return;
+        }
+        this.dragIndex = idx;
+        this.data[idx] = level;
+      } else if (!this.eraser) {
+        const n = this.data.length;
+        const rel = Math.max(0, Math.min(1, (px - EMO_PAD_LEFT) / EMO_PLOT_W));
+        const insertAt = n === 0 ? 0 : Math.max(0, Math.min(n, Math.round(rel * n)));
+        this.data.splice(insertAt, 0, level);
+        this.dragIndex = insertAt;
+      } else {
+        this.dragging = false;
+      }
+    }
+    if (this.dragging && this.dragIndex >= 0 && this.dragIndex < this.data.length) {
+      this.data[this.dragIndex] = level;
+    }
+    this.updateLine();
+  }
+  levelAt(py) {
+    const plotH = EMO_HEIGHT - EMO_PAD_TOP - EMO_PAD_BOTTOM;
+    const raw = EMOTION_LEVELS - (py - EMO_PAD_TOP) / plotH * (EMOTION_LEVELS - 1);
+    return Math.max(1, Math.min(EMOTION_LEVELS, Math.round(raw)));
+  }
+  nearestPoint(px, py) {
+    const n = this.data.length;
+    for (let i = 0; i < n; i++) {
+      if (Math.abs(this.xPx(i) - px) < 14 && Math.abs(this.yPx(this.data[i]) - py) < 14) {
+        return i;
+      }
+    }
+    return -1;
+  }
+  updateLine() {
+    if (!this.polyEl || !this.pointsEl) return;
+    const n = this.data.length;
+    const pts = this.data.map((v, i) => this.xPx(i) + "," + this.yPx(v));
+    this.polyEl.setAttribute("points", pts.join(" "));
+    this.polyEl.setAttribute("stroke", this.opts.color);
+    while (this.pointsEl.firstChild) this.pointsEl.removeChild(this.pointsEl.firstChild);
+    for (let i = 0; i < n; i++) {
+      const c = makeSvgEl("circle", {
+        cx: String(this.xPx(i)),
+        cy: String(this.yPx(this.data[i])),
+        r: "5"
+      });
+      c.setAttribute("fill", this.opts.color);
+      this.pointsEl.appendChild(c);
+    }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 var MoveNodeModal = class extends import_obsidian2.Modal {
   constructor(app, opts) {
     super(app);
@@ -885,9 +1044,9 @@ var MoveNodeModal = class extends import_obsidian2.Modal {
 
 // matrix-view.ts
 var MAX_PREVIEW = 300;
-var SVG_NS = "http://www.w3.org/2000/svg";
+var SVG_NS2 = "http://www.w3.org/2000/svg";
 function makeSvg(tag, attrs) {
-  const el = document.createElementNS(SVG_NS, tag);
+  const el = document.createElementNS(SVG_NS2, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
 }
@@ -1326,7 +1485,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     td.empty();
     td.removeClass("is-filled", "is-empty");
     const data = (_a = node.emotionData) != null ? _a : [];
-    if (node.emotionFile && data.length >= 2) {
+    if (data.length >= 2) {
       td.addClass("is-filled");
       const body = td.createDiv("chs-cell-body");
       renderSparkline(body, data, dim.color, 140, 44);
@@ -1449,7 +1608,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     }
     const emotionCell = t.closest("[data-emotion-cell]");
     if (emotionCell) {
-      void this.openEmotionNote(emotionCell.dataset.emotionCell);
+      this.openEmotionEditor(emotionCell.dataset.emotionCell);
       return;
     }
     const summaryEl = t.closest("[data-summary-id]");
@@ -1466,7 +1625,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     if (chartBtn) {
       const id = chartBtn.dataset.chartNodeId;
       const n = this.book ? findNode(this.book.structure, id) : null;
-      if ((n == null ? void 0 : n.type) === "chapter") void this.openEmotionNote(id);
+      if ((n == null ? void 0 : n.type) === "chapter") this.openEmotionEditor(id);
       return;
     }
     const menuBtn = t.closest("[data-node-menu-id]");
@@ -1536,7 +1695,8 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       void this.openCellEditor(key, chapterId, dimId);
     }
   }
-  async openEmotionNote(chapterId) {
+  openEmotionEditor(chapterId) {
+    var _a;
     const book = this.book;
     if (!book) return;
     const chapter = findNode(book.structure, chapterId);
@@ -1546,23 +1706,17 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       new import_obsidian3.Notice("\u8BF7\u5148\u6DFB\u52A0\u5F00\u542F\u300C\u60C5\u7EEA\u6298\u7EBF\u300D\u7684\u7EF4\u5EA6");
       return;
     }
-    const path = buildEmotionPath(book, chapterId, dim.name);
-    let file;
-    const existing = this.app.vault.getAbstractFileByPath(path);
-    if (existing instanceof import_obsidian3.TFile) {
-      file = existing;
-      try {
-        chapter.emotionData = parseEmotionData(await this.app.vault.cachedRead(file));
-      } catch (e) {
+    new EmotionEditorModal(this.app, {
+      title: chapter.name + " \xB7 " + dim.name + "\u6298\u7EBF",
+      color: dim.color,
+      yAxisLabels: dim.yAxisLabels,
+      initial: (_a = chapter.emotionData) != null ? _a : [],
+      onSave: async (data) => {
+        chapter.emotionData = data;
+        await this.plugin.saveSettings();
+        this.renderMatrix();
       }
-    } else {
-      file = await createEmotionNote(this.app.vault, book, chapterId, dim.name, [3, 3, 3, 3, 3]);
-      chapter.emotionFile = file.path;
-      chapter.emotionData = [3, 3, 3, 3, 3];
-      await this.plugin.saveSettings();
-      this.renderMatrix();
-    }
-    await this.app.workspace.getLeaf(false).openFile(file);
+    }).open();
   }
   async openCellEditor(key, chapterId, dimId) {
     const book = this.book;
@@ -1750,7 +1904,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     }
     if (node.type === "chapter") {
       menu.addItem(
-        (i) => i.setTitle("\u7F16\u8F91\u60C5\u7EEA\u6298\u7EBF").setIcon("activity").onClick(() => void this.openEmotionNote(nodeId))
+        (i) => i.setTitle("\u7F16\u8F91\u60C5\u7EEA\u6298\u7EBF").setIcon("activity").onClick(() => this.openEmotionEditor(nodeId))
       );
     }
     menu.addItem(
@@ -1910,7 +2064,6 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     const book = this.book;
     if (!book) return;
     const chapters = node.type === "chapter" ? [node] : collectChapters([node]);
-    const chartDim = book.dimensions.find((d) => d.isChart);
     for (const ch of chapters) {
       for (const dim of book.dimensions) {
         if (dim.isChart) continue;
@@ -1927,19 +2080,6 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
           }
         }
         cell.filePath = newPath;
-      }
-      if (chartDim && ch.emotionFile) {
-        const newEmotion = buildEmotionPath(book, ch.id, chartDim.name);
-        if (newEmotion !== ch.emotionFile) {
-          const f = this.app.vault.getAbstractFileByPath(ch.emotionFile);
-          if (f instanceof import_obsidian3.TFile) {
-            try {
-              await this.app.fileManager.renameFile(f, newEmotion);
-            } catch (e) {
-            }
-          }
-          ch.emotionFile = newEmotion;
-        }
       }
     }
     const summaryNodes = [];
@@ -2204,7 +2344,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     for (const ch of collectChapters(book.structure)) {
       for (const d of book.dimensions) {
         if (d.isChart) {
-          if (ch.emotionFile && ((_b = (_a = ch.emotionData) == null ? void 0 : _a.length) != null ? _b : 0) >= 2) n++;
+          if (((_b = (_a = ch.emotionData) == null ? void 0 : _a.length) != null ? _b : 0) >= 2) n++;
           continue;
         }
         const c = book.cells[cellKey(ch.id, d.id)];
@@ -2393,11 +2533,6 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
         void this.onVaultDelete(file);
       })
     );
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => {
-        void this.onVaultModify(file);
-      })
-    );
   }
   onunload() {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);
@@ -2558,7 +2693,6 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
       summaryHasContent: !!n.summaryHasContent,
       children: Array.isArray(n.children) ? n.children.map((c) => this.normalizeNode(c)) : [],
       collapsed: !!n.collapsed,
-      emotionFile: typeof n.emotionFile === "string" ? n.emotionFile : "",
       emotionData: Array.isArray(n.emotionData) ? n.emotionData.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : []
     };
   }
@@ -2590,10 +2724,6 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           node.summaryFile = file.path;
           changed = true;
         }
-        if (node.emotionFile === oldPath) {
-          node.emotionFile = file.path;
-          changed = true;
-        }
       }
     }
     if (changed) {
@@ -2618,31 +2748,6 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           node.summaryFile = "";
           node.summaryHasContent = false;
           changed = true;
-        }
-        if (node.emotionFile === file.path) {
-          node.emotionFile = "";
-          node.emotionData = [];
-          changed = true;
-        }
-      }
-    }
-    if (changed) {
-      await this.saveSettings();
-      this.notifyViews();
-    }
-  }
-  async onVaultModify(file) {
-    if (!(file instanceof import_obsidian5.TFile)) return;
-    let changed = false;
-    for (const book of this.settings.books) {
-      for (const ch of collectChapters(book.structure)) {
-        if (ch.emotionFile === file.path) {
-          try {
-            const content = await this.app.vault.cachedRead(file);
-            ch.emotionData = parseEmotionData(content);
-            changed = true;
-          } catch (e) {
-          }
         }
       }
     }

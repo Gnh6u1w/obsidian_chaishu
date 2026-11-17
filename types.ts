@@ -21,9 +21,7 @@ export interface NodeData {
   summaryHasContent: boolean;
   children: NodeData[];
   collapsed: boolean;
-  /** Chapter-only: path of the emotion-line note, "" when not created. */
-  emotionFile: string;
-  /** Chapter-only: emotion values (1..5) cached from the emotion note. */
+  /** Chapter-only: emotion values (1..5) stored in the plugin config. */
   emotionData: number[];
 }
 
