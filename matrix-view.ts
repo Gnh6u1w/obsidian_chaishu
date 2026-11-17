@@ -10,9 +10,12 @@ import type ChaiShuMatrixPlugin from "./main";
 import {
   BookData,
   CellData,
-  CHART_VALUE_MAX,
+  DEFAULT_Y_AXIS_LABELS,
   DIMENSION_COLORS,
   Dimension,
+  EMOTION_LEVELS,
+  EmotionPoint,
+  ImportRequest,
   NodeData,
   VIEW_TYPE_CHAISHU_MATRIX,
 } from "./types";
@@ -29,6 +32,7 @@ import {
   findNode,
   findParentArray,
   isSelfOrDescendant,
+  normalizeYAxisLabels,
   removeNode,
   sanitizeFileName,
   stripFrontmatter,
@@ -39,6 +43,8 @@ import {
   CellEditModal,
   ConfirmModal,
   DimensionModal,
+  ImportModal,
+  MoveNodeModal,
   StoragePathModal,
   SummaryModal,
   WallpaperModal,
@@ -47,18 +53,33 @@ import {
 const MAX_PREVIEW = 300;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-// Chart layout constants (pixels in the SVG coordinate system).
-const CHART_SLOT = 44;
-const CHART_PAD_LEFT = 40;
-const CHART_PAD_RIGHT = 12;
+// Emotion chart layout (pixels in the SVG coordinate system).
+const CHART_PLOT_W = 520;
+const CHART_PAD_LEFT = 46;
+const CHART_PAD_RIGHT = 16;
 const CHART_PAD_TOP = 14;
 const CHART_PAD_BOTTOM = 30;
-const CHART_HEIGHT = 200;
+const CHART_HEIGHT = 210;
 
 function makeSvg(tag: string, attrs: Record<string, string>): SVGElement {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
+}
+
+/** Aggregate per-chapter emotion points into one macro 0..100 line. */
+function aggregateEmotions(book: BookData, chapters: NodeData[]): EmotionPoint[] {
+  const n = chapters.length;
+  const out: EmotionPoint[] = [];
+  chapters.forEach((ch, i) => {
+    const pts = book.chapterEmotions[ch.id] ?? [];
+    const start = n > 0 ? (i / n) * 100 : 0;
+    const w = n > 0 ? 100 / n : 100;
+    for (const p of pts) {
+      out.push({ x: start + (p.x / 100) * w, y: p.y });
+    }
+  });
+  return out.sort((a, b) => a.x - b.x);
 }
 
 export class ChaiShuMatrixView extends ItemView {
@@ -76,6 +97,7 @@ export class ChaiShuMatrixView extends ItemView {
   private selectEl!: HTMLSelectElement;
 
   // Chart state
+  private chartPanelEl: HTMLElement | null = null;
   private chartBodyEl: HTMLElement | null = null;
   private chartSvgEl: SVGSVGElement | null = null;
   private chartPolyEl: SVGElement | null = null;
@@ -84,6 +106,8 @@ export class ChaiShuMatrixView extends ItemView {
   private chartEraser = false;
   private chartPointerDown = false;
   private activeChartDimId = "";
+  private chartLevel: "volume" | "unit" | "chapter" = "chapter";
+  private activeChartNodeId = "";
 
   // Drag state
   private dragNodeId: string | null = null;
@@ -154,6 +178,7 @@ export class ChaiShuMatrixView extends ItemView {
       : null;
     this.observer?.disconnect();
     this.observer = null;
+    this.chartPanelEl = null;
 
     const { contentEl } = this;
     contentEl.empty();
@@ -238,6 +263,16 @@ export class ChaiShuMatrixView extends ItemView {
       cls: "chs-btn chs-btn-ghost chs-btn-danger-text",
     });
     delBtn.addEventListener("click", () => this.deleteCurrentBook());
+
+    const settingsBtn = row.createEl("button", { cls: "chs-icon-btn chs-icon-btn-lg" });
+    settingsBtn.setAttribute("aria-label", "拆书设置");
+    setIcon(settingsBtn, "settings");
+    settingsBtn.addEventListener("click", () => this.openBookSettingsMenu(settingsBtn));
+
+    const wallpaperBtn = row.createEl("button", { cls: "chs-icon-btn chs-icon-btn-lg" });
+    wallpaperBtn.setAttribute("aria-label", "上传壁纸");
+    setIcon(wallpaperBtn, "image");
+    wallpaperBtn.addEventListener("click", () => this.openWallpaper());
   }
 
   private buildEmptyState(): void {
@@ -268,21 +303,6 @@ export class ChaiShuMatrixView extends ItemView {
       book.bookInfo.score = v;
       this.scheduleSave();
     });
-
-    const actions = info.createDiv("chs-bookinfo-actions");
-    const settingsBtn = actions.createEl("button", {
-      cls: "chs-icon-btn chs-icon-btn-lg",
-    });
-    settingsBtn.setAttribute("aria-label", "拆书设置");
-    setIcon(settingsBtn, "settings");
-    settingsBtn.addEventListener("click", () => this.openBookSettingsMenu(settingsBtn));
-
-    const wallpaperBtn = actions.createEl("button", {
-      cls: "chs-icon-btn chs-icon-btn-lg",
-    });
-    wallpaperBtn.setAttribute("aria-label", "上传壁纸");
-    setIcon(wallpaperBtn, "image");
-    wallpaperBtn.addEventListener("click", () => this.openWallpaper());
   }
 
   private makeField(
@@ -335,6 +355,8 @@ export class ChaiShuMatrixView extends ItemView {
     addVol.addEventListener("click", () => this.addVolume());
     const addUnit = mid.createEl("button", { text: "＋ 添加小单元", cls: "chs-btn" });
     addUnit.addEventListener("click", () => this.addUnit());
+    const importBtn = mid.createEl("button", { text: "📥 导入", cls: "chs-btn" });
+    importBtn.addEventListener("click", () => this.openImportModal());
 
     this.statsEl = tb.createDiv("chs-stats");
   }
@@ -345,20 +367,51 @@ export class ChaiShuMatrixView extends ItemView {
     return Math.min(500, n);
   }
 
+  // ================================================================ chart
+
+  private chartX(x: number): number {
+    return CHART_PAD_LEFT + (x / 100) * CHART_PLOT_W;
+  }
+
+  private chartY(level: number): number {
+    const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
+    return CHART_PAD_TOP + ((EMOTION_LEVELS - level) / (EMOTION_LEVELS - 1)) * plotH;
+  }
+
+  private levelNodes(): NodeData[] {
+    const book = this.book;
+    if (!book) return [];
+    if (this.chartLevel === "chapter") return collectChapters(book.structure);
+    if (this.chartLevel === "unit") return collectUnits(book.structure);
+    return collectVolumes(book.structure);
+  }
+
+  private levelLabel(): string {
+    return this.chartLevel === "chapter" ? "章节" : this.chartLevel === "unit" ? "单元" : "卷";
+  }
+
   private buildChartPanel(): void {
-    const book = this.book as BookData;
-    const chartDims = book.dimensions.filter((d) => d.type === "chart");
+    this.chartPanelEl?.remove();
+    this.chartPanelEl = null;
     this.chartBodyEl = null;
     this.chartSvgEl = null;
     this.chartPolyEl = null;
     this.chartPointsEl = null;
+
+    const book = this.book as BookData;
+    const chartDims = book.dimensions.filter((d) => d.isChart);
     if (chartDims.length === 0) return;
 
     if (!chartDims.some((d) => d.id === this.activeChartDimId)) {
       this.activeChartDimId = chartDims[0].id;
     }
+    const levelNodes = this.levelNodes();
+    if (!levelNodes.some((n) => n.id === this.activeChartNodeId)) {
+      this.activeChartNodeId = levelNodes[0]?.id ?? "";
+    }
 
     const panel = this.wrapEl.createDiv("chs-chart-panel");
+    this.chartPanelEl = panel;
     const head = panel.createDiv("chs-chart-head");
 
     const toggle = head.createSpan("chs-toggle");
@@ -385,27 +438,58 @@ export class ChaiShuMatrixView extends ItemView {
       });
     }
 
-    const eraser = head.createEl("button", {
-      cls: "chs-btn chs-btn-sm",
-      text: "🧽 橡皮擦",
-    });
-    eraser.addEventListener("click", () => {
-      this.chartEraser = !this.chartEraser;
-      eraser.toggleClass("chs-btn-primary", this.chartEraser);
+    const levelSel = head.createEl("select");
+    levelSel.addClass("chs-select", "chs-chart-level-select");
+    levelSel.createEl("option", { value: "chapter", text: "章节" });
+    levelSel.createEl("option", { value: "unit", text: "单元" });
+    levelSel.createEl("option", { value: "volume", text: "卷" });
+    levelSel.value = this.chartLevel;
+    levelSel.addEventListener("change", () => {
+      this.chartLevel = levelSel.value as "volume" | "unit" | "chapter";
+      const ln = this.levelNodes();
+      this.activeChartNodeId = ln[0]?.id ?? "";
+      this.buildChartPanel();
     });
 
-    const clear = head.createEl("button", {
-      cls: "chs-btn chs-btn-sm chs-btn-ghost",
-      text: "清除",
+    const nodeSel = head.createEl("select");
+    nodeSel.addClass("chs-select", "chs-chart-node-select");
+    for (const n of levelNodes) {
+      const o = nodeSel.createEl("option");
+      o.value = n.id;
+      o.textContent = n.name;
+    }
+    nodeSel.value = this.activeChartNodeId;
+    nodeSel.addEventListener("change", () => {
+      this.activeChartNodeId = nodeSel.value;
+      this.renderChart();
     });
-    clear.addEventListener("click", () => {
-      const b = this.book;
-      if (b) {
-        b.chartData[this.activeChartDimId] = [];
-        void this.plugin.saveSettings();
-        this.renderChart();
-      }
-    });
+
+    if (this.chartLevel === "chapter") {
+      const eraser = head.createEl("button", {
+        cls: "chs-btn chs-btn-sm",
+        text: "🧽 橡皮擦",
+      });
+      eraser.addEventListener("click", () => {
+        this.chartEraser = !this.chartEraser;
+        eraser.toggleClass("chs-btn-primary", this.chartEraser);
+      });
+
+      const clear = head.createEl("button", {
+        cls: "chs-btn chs-btn-sm chs-btn-ghost",
+        text: "清除",
+      });
+      clear.addEventListener("click", () => {
+        const b = this.book;
+        const n = b ? findNode(b.structure, this.activeChartNodeId) : null;
+        if (b && n) {
+          b.chapterEmotions[n.id] = [];
+          void this.plugin.saveSettings();
+          this.renderChart();
+        }
+      });
+    } else {
+      head.createSpan("chs-chart-readonly").setText("（只读汇总）");
+    }
 
     this.chartBodyEl = panel.createDiv("chs-chart-body");
     this.renderChart();
@@ -423,39 +507,46 @@ export class ChaiShuMatrixView extends ItemView {
     if (!book) return;
 
     const dim = book.dimensions.find((d) => d.id === this.activeChartDimId);
-    if (!dim) return;
+    if (!dim || !dim.isChart) return;
 
-    const chapters = collectChapters(book.structure);
-    const n = chapters.length;
-    if (n === 0) {
-      this.chartBodyEl.createDiv("chs-chart-empty").setText("暂无章节，先添加章节即可绘制情绪折线");
+    let node = this.activeChartNodeId
+      ? findNode(book.structure, this.activeChartNodeId)
+      : null;
+    if (!node) {
+      const ln = this.levelNodes();
+      node = ln[0] ?? null;
+      this.activeChartNodeId = node?.id ?? "";
+    }
+    if (!node) {
+      this.chartBodyEl.createDiv("chs-chart-empty").setText("暂无" + this.levelLabel() + "，先创建对应层级节点");
       return;
     }
 
-    const plotW = n * CHART_SLOT;
-    const totalW = CHART_PAD_LEFT + plotW + CHART_PAD_RIGHT;
+    const editable = this.chartLevel === "chapter" && node.type === "chapter";
+    const labels = normalizeYAxisLabels(dim.yAxisLabels);
     const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-    const xCenter = (i: number) => CHART_PAD_LEFT + i * CHART_SLOT + CHART_SLOT / 2;
-    const yValue = (v: number) => CHART_PAD_TOP + ((CHART_VALUE_MAX - v) / CHART_VALUE_MAX) * plotH;
+    const totalW = CHART_PAD_LEFT + CHART_PLOT_W + CHART_PAD_RIGHT;
 
     const svg = makeSvg("svg", {
-      width: String(Math.max(totalW, 120)),
+      width: String(totalW),
       height: String(CHART_HEIGHT),
     });
     svg.setAttribute("class", "chs-chart-svg");
-    svg.style.touchAction = "none";
+    svg.style.touchAction = editable ? "none" : "auto";
 
-    // horizontal grid + labels
-    for (const v of [0, 5, 10]) {
-      const y = yValue(v);
+    // horizontal gridlines for the 5 levels + labels
+    for (let level = 1; level <= EMOTION_LEVELS; level++) {
+      const y = this.chartY(level);
+      const isBaseline = level === 3;
       const line = makeSvg("line", {
         x1: String(CHART_PAD_LEFT),
-        x2: String(totalW - CHART_PAD_RIGHT),
+        x2: String(CHART_PAD_LEFT + CHART_PLOT_W),
         y1: String(y),
         y2: String(y),
       });
       line.style.stroke = "var(--background-modifier-border)";
-      line.setAttribute("stroke-width", "1");
+      line.setAttribute("stroke-width", isBaseline ? "1.5" : "1");
+      if (isBaseline) line.setAttribute("stroke-dasharray", "4 3");
       svg.appendChild(line);
 
       const lbl = makeSvg("text", {
@@ -463,49 +554,33 @@ export class ChaiShuMatrixView extends ItemView {
         y: String(y + 4),
         "text-anchor": "end",
       });
-      lbl.textContent = String(v);
-      lbl.style.fill = "var(--text-muted)";
-      lbl.setAttribute("font-size", "10");
+      lbl.textContent = labels[level - 1] ?? String(level);
+      lbl.style.fill = isBaseline ? "var(--text-normal)" : "var(--text-muted)";
+      lbl.setAttribute("font-size", "11");
+      if (isBaseline) lbl.setAttribute("font-weight", "600");
       svg.appendChild(lbl);
     }
 
-    // vertical grid per chapter
-    for (let i = 0; i < n; i++) {
-      const x = xCenter(i);
-      const line = makeSvg("line", {
-        x1: String(x),
-        x2: String(x),
-        y1: String(CHART_PAD_TOP),
-        y2: String(CHART_PAD_TOP + plotH),
-      });
-      line.style.stroke = "var(--background-modifier-border)";
-      line.setAttribute("stroke-width", "1");
-      svg.appendChild(line);
-    }
-
-    // chapter index labels
-    if (n <= 24) {
-      for (let i = 0; i < n; i++) {
-        const lbl = makeSvg("text", {
-          x: String(xCenter(i)),
-          y: String(CHART_HEIGHT - 8),
-          "text-anchor": "middle",
-        });
-        lbl.textContent = String(i + 1);
-        lbl.style.fill = "var(--text-muted)";
-        lbl.setAttribute("font-size", "9");
-        svg.appendChild(lbl);
-      }
-    }
+    // x-axis line
+    const xAxis = makeSvg("line", {
+      x1: String(CHART_PAD_LEFT),
+      x2: String(CHART_PAD_LEFT + CHART_PLOT_W),
+      y1: String(CHART_PAD_TOP + plotH),
+      y2: String(CHART_PAD_TOP + plotH),
+    });
+    xAxis.style.stroke = "var(--background-modifier-border)";
+    xAxis.setAttribute("stroke-width", "1");
+    svg.appendChild(xAxis);
 
     const poly = makeSvg("polyline", {
       points: "",
       fill: "none",
-      "stroke-width": "2.5",
+      "stroke-width": editable ? "2.5" : "3",
       "stroke-linejoin": "round",
       "stroke-linecap": "round",
     });
     poly.setAttribute("stroke", dim.color);
+    if (!editable) poly.setAttribute("opacity", "0.7");
     svg.appendChild(poly);
     this.chartPolyEl = poly;
 
@@ -513,19 +588,24 @@ export class ChaiShuMatrixView extends ItemView {
     svg.appendChild(pointsG);
     this.chartPointsEl = pointsG;
 
-    svg.addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      this.chartPointerDown = true;
-      this.handleChartPointer(e as PointerEvent);
-    });
-    svg.addEventListener("pointermove", (e) => {
-      if (this.chartPointerDown) this.handleChartPointer(e as PointerEvent);
-    });
-    const stop = () => {
-      this.chartPointerDown = false;
-    };
-    svg.addEventListener("pointerup", stop);
-    svg.addEventListener("pointerleave", stop);
+    if (editable) {
+      svg.style.cursor = "crosshair";
+      svg.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        this.chartPointerDown = true;
+        this.handleChartPointer(e as PointerEvent);
+      });
+      svg.addEventListener("pointermove", (e) => {
+        if (this.chartPointerDown) this.handleChartPointer(e as PointerEvent);
+      });
+      const stop = () => {
+        this.chartPointerDown = false;
+      };
+      svg.addEventListener("pointerup", stop);
+      svg.addEventListener("pointerleave", stop);
+    } else {
+      svg.style.pointerEvents = "none";
+    }
 
     this.chartBodyEl.appendChild(svg);
     this.chartSvgEl = svg as SVGSVGElement;
@@ -535,34 +615,31 @@ export class ChaiShuMatrixView extends ItemView {
   private updateChartLine(): void {
     const book = this.book;
     const dim = book?.dimensions.find((d) => d.id === this.activeChartDimId);
-    if (!book || !dim || !this.chartPolyEl || !this.chartPointsEl) return;
+    if (!book || !dim || !dim.isChart || !this.chartPolyEl || !this.chartPointsEl) return;
 
-    const chapters = collectChapters(book.structure);
-    const points = book.chartData[this.activeChartDimId] ?? [];
-    const valueByChapter = new Map<string, number>();
-    for (const p of points) valueByChapter.set(p.chapterId, p.value);
+    const node = this.activeChartNodeId
+      ? findNode(book.structure, this.activeChartNodeId)
+      : null;
+    if (!node) return;
 
-    const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-    const xCenter = (i: number) => CHART_PAD_LEFT + i * CHART_SLOT + CHART_SLOT / 2;
-    const yValue = (v: number) => CHART_PAD_TOP + ((CHART_VALUE_MAX - v) / CHART_VALUE_MAX) * plotH;
-
-    const linePts: string[] = [];
-    for (let i = 0; i < chapters.length; i++) {
-      const v = valueByChapter.get(chapters[i].id);
-      if (v != null) linePts.push(xCenter(i) + "," + yValue(v));
+    let points: EmotionPoint[];
+    if (this.chartLevel === "chapter" && node.type === "chapter") {
+      points = (book.chapterEmotions[node.id] ?? []).slice().sort((a, b) => a.x - b.x);
+    } else {
+      points = aggregateEmotions(book, node.type === "chapter" ? [node] : collectChapters([node]));
     }
+
+    const linePts = points.map((p) => this.chartX(p.x) + "," + this.chartY(p.y));
     this.chartPolyEl.setAttribute("points", linePts.join(" "));
     this.chartPolyEl.setAttribute("stroke", dim.color);
 
     while (this.chartPointsEl.firstChild) {
       this.chartPointsEl.removeChild(this.chartPointsEl.firstChild);
     }
-    for (let i = 0; i < chapters.length; i++) {
-      const v = valueByChapter.get(chapters[i].id);
-      if (v == null) continue;
+    for (const p of points) {
       const c = makeSvg("circle", {
-        cx: String(xCenter(i)),
-        cy: String(yValue(v)),
+        cx: String(this.chartX(p.x)),
+        cy: String(this.chartY(p.y)),
         r: "4",
       });
       c.setAttribute("fill", dim.color);
@@ -573,47 +650,37 @@ export class ChaiShuMatrixView extends ItemView {
   private handleChartPointer(e: PointerEvent): void {
     const book = this.book;
     if (!book) return;
-    const dimId = this.activeChartDimId;
-    if (!dimId) return;
-    const chapters = collectChapters(book.structure);
-    const n = chapters.length;
-    if (n === 0) return;
+    if (this.chartLevel !== "chapter") return;
+    const node = findNode(book.structure, this.activeChartNodeId);
+    if (!node || node.type !== "chapter") return;
 
     const svg = e.currentTarget as SVGSVGElement;
     const rect = svg.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const slot = Math.floor((x - CHART_PAD_LEFT) / CHART_SLOT);
-    if (slot < 0 || slot >= n) return;
-    const chapterId = chapters[slot].id;
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
+
+    const arr = book.chapterEmotions[node.id] ?? (book.chapterEmotions[node.id] = []);
 
     if (this.chartEraser) {
-      this.removeChartPoint(dimId, chapterId);
+      const idx = arr.findIndex(
+        (p) => Math.abs(this.chartX(p.x) - px) < 14 && Math.abs(this.chartY(p.y) - py) < 14
+      );
+      if (idx !== -1) arr.splice(idx, 1);
     } else {
-      const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-      let value = ((CHART_PAD_TOP + plotH - y) / plotH) * CHART_VALUE_MAX;
-      value = Math.max(0, Math.min(CHART_VALUE_MAX, Math.round(value)));
-      this.setChartPoint(dimId, chapterId, value);
+      const x = Math.max(0, Math.min(100, ((px - CHART_PAD_LEFT) / CHART_PLOT_W) * 100));
+      const level = Math.max(
+        1,
+        Math.min(
+          EMOTION_LEVELS,
+          Math.round(EMOTION_LEVELS - ((py - CHART_PAD_TOP) / plotH) * (EMOTION_LEVELS - 1))
+        )
+      );
+      const rx = Math.round(x);
+      const existing = arr.findIndex((p) => Math.abs(p.x - rx) <= 3);
+      if (existing !== -1) arr[existing] = { x: rx, y: level };
+      else arr.push({ x: rx, y: level });
     }
-  }
-
-  private setChartPoint(dimId: string, chapterId: string, value: number): void {
-    const book = this.book;
-    if (!book) return;
-    const arr = book.chartData[dimId] ?? (book.chartData[dimId] = []);
-    const pt = arr.find((p) => p.chapterId === chapterId);
-    if (pt) pt.value = value;
-    else arr.push({ chapterId, value });
-    this.updateChartLine();
-    this.debounceChartSave();
-  }
-
-  private removeChartPoint(dimId: string, chapterId: string): void {
-    const book = this.book;
-    if (!book) return;
-    const arr = book.chartData[dimId];
-    if (!arr) return;
-    book.chartData[dimId] = arr.filter((p) => p.chapterId !== chapterId);
     this.updateChartLine();
     this.debounceChartSave();
   }
@@ -624,6 +691,21 @@ export class ChaiShuMatrixView extends ItemView {
       this.chartSaveTimer = null;
       void this.plugin.saveSettings();
     }, 300);
+  }
+
+  private openChartForNode(nodeId: string): void {
+    const book = this.book;
+    if (!book) return;
+    const node = findNode(book.structure, nodeId);
+    if (!node) return;
+    if (!book.dimensions.some((d) => d.isChart)) {
+      new Notice("请先在维度设置中开启「情绪折线」");
+      return;
+    }
+    this.chartLevel = node.type as "volume" | "unit" | "chapter";
+    this.activeChartNodeId = nodeId;
+    this.chartCollapsed = false;
+    this.render();
   }
 
   // ================================================================ matrix
@@ -686,7 +768,7 @@ export class ChaiShuMatrixView extends ItemView {
       th.style.setProperty("--chs-color", dim.color);
       const cap = th.createDiv("chs-capsule");
       cap.createSpan("chs-capsule-dot").style.backgroundColor = dim.color;
-      cap.createSpan("chs-capsule-name").setText(dim.name + (dim.type === "chart" ? " 📈" : ""));
+      cap.createSpan("chs-capsule-name").setText(dim.name + (dim.isChart ? " 📈" : ""));
     }
 
     const addDimTh = headRow.createEl("th", { cls: "chs-add-dim-head" });
@@ -773,6 +855,11 @@ export class ChaiShuMatrixView extends ItemView {
       });
       sbtn.dataset.summaryId = node.id;
     }
+
+    const chartBtn = td.createEl("button", { cls: "chs-icon-btn chs-node-chart-btn" });
+    chartBtn.dataset.chartNodeId = node.id;
+    chartBtn.setAttribute("aria-label", "情绪折线");
+    setIcon(chartBtn, "activity");
 
     const more = td.createEl("button", { cls: "chs-icon-btn chs-node-menu-btn" });
     more.dataset.nodeMenuId = node.id;
@@ -938,6 +1025,12 @@ export class ChaiShuMatrixView extends ItemView {
     const toggleEl = t.closest("[data-toggle-id]") as HTMLElement | null;
     if (toggleEl) {
       this.toggleNode(toggleEl.dataset.toggleId as string);
+      return;
+    }
+
+    const chartBtn = t.closest("[data-chart-node-id]") as HTMLElement | null;
+    if (chartBtn) {
+      this.openChartForNode(chartBtn.dataset.chartNodeId as string);
       return;
     }
 
@@ -1245,6 +1338,9 @@ export class ChaiShuMatrixView extends ItemView {
       );
     }
     menu.addItem((i) =>
+      i.setTitle("移动到…").setIcon("folder-input").onClick(() => this.openMoveNodeModal(nodeId))
+    );
+    menu.addItem((i) =>
       i.setTitle("上移").setIcon("arrow-up").onClick(() => this.moveNodeRelative(nodeId, -1))
     );
     menu.addItem((i) =>
@@ -1263,6 +1359,30 @@ export class ChaiShuMatrixView extends ItemView {
   private openNodeMenu(nodeId: string, pos: { x: number; y: number }): void {
     const menu = this.buildNodeMenu(nodeId);
     if (menu) menu.showAtPosition(pos);
+  }
+
+  private openMoveNodeModal(nodeId: string): void {
+    const book = this.book;
+    if (!book) return;
+    const node = findNode(book.structure, nodeId);
+    if (!node) return;
+    const targets: { id: string; name: string; type: "volume" | "unit" }[] = [];
+    if (node.type === "chapter" || node.type === "unit") {
+      for (const v of collectVolumes(book.structure)) {
+        targets.push({ id: v.id, name: v.name, type: "volume" });
+      }
+    }
+    if (node.type === "chapter") {
+      for (const u of collectUnits(book.structure)) {
+        targets.push({ id: u.id, name: u.name, type: "unit" });
+      }
+    }
+    new MoveNodeModal(this.app, {
+      targets,
+      onSelect: (targetId) => {
+        void this.performMove(nodeId, targetId);
+      },
+    }).open();
   }
 
   // ---------------------------------------------------------- drag & drop
@@ -1440,9 +1560,14 @@ export class ChaiShuMatrixView extends ItemView {
     if (!book) return;
     new DimensionModal(this.app, {
       title: "添加新维度",
-      onSave: async (name, color, chart) => {
-        const dim: Dimension = { id: uid("d"), name: sanitizeFileName(name), color };
-        if (chart || dim.name === "情绪") dim.type = "chart";
+      onSave: async (name, color, isChart, yAxisLabels) => {
+        const dim: Dimension = {
+          id: uid("d"),
+          name: sanitizeFileName(name),
+          color,
+          isChart: isChart || name === "情绪",
+          yAxisLabels: normalizeYAxisLabels(yAxisLabels),
+        };
         book.dimensions.push(dim);
         await this.plugin.saveSettings();
         this.render();
@@ -1459,12 +1584,17 @@ export class ChaiShuMatrixView extends ItemView {
     new DimensionModal(this.app, {
       title: "编辑维度",
       initial: dim,
-      onSave: async (name, color, chart) => {
-        dim.name = sanitizeFileName(name);
+      onSave: async (name, color, isChart, yAxisLabels) => {
+        const newName = sanitizeFileName(name);
         dim.color = color;
-        dim.type = chart || dim.name === "情绪" ? "chart" : undefined;
-        await this.plugin.saveSettings();
-        this.render();
+        dim.isChart = isChart || newName === "情绪";
+        dim.yAxisLabels = normalizeYAxisLabels(yAxisLabels);
+        if (newName !== dim.name) {
+          await this.plugin.renameDimension(book.id, dim.id, newName);
+        } else {
+          await this.plugin.saveSettings();
+          this.render();
+        }
       },
       onDelete: () => {
         new ConfirmModal(this.app, {
@@ -1474,13 +1604,78 @@ export class ChaiShuMatrixView extends ItemView {
           danger: true,
           onConfirm: async () => {
             book.dimensions = book.dimensions.filter((d) => d.id !== dimId);
-            delete book.chartData[dimId];
             await this.plugin.saveSettings();
             this.render();
           },
         }).open();
       },
     }).open();
+  }
+
+  // ---------------------------------------------------------- import
+
+  private openImportModal(): void {
+    const book = this.book;
+    if (!book) return;
+    const chapters = collectChapters(book.structure).map((c) => ({ id: c.id, name: c.name }));
+    const dimensions = book.dimensions.map((d) => ({ id: d.id, name: d.name }));
+    if (chapters.length === 0) {
+      new Notice("请先添加章节");
+      return;
+    }
+    if (dimensions.length === 0) {
+      new Notice("请先添加维度");
+      return;
+    }
+    new ImportModal(this.app, {
+      chapters,
+      dimensions,
+      onImport: (req) => void this.handleImport(req),
+    }).open();
+  }
+
+  private async handleImport(req: ImportRequest): Promise<void> {
+    const book = this.book;
+    if (!book) return;
+    const chapter = findNode(book.structure, req.chapterId);
+    const dim = book.dimensions.find((d) => d.id === req.dimensionId);
+    if (!chapter || !dim) {
+      new Notice("目标章节或维度无效");
+      return;
+    }
+    const key = cellKey(chapter.id, dim.id);
+    try {
+      if (req.sourceType === "external") {
+        const body = stripFrontmatter(req.content ?? "");
+        const file = await createChapterNote(this.app.vault, book, chapter.id, dim, body);
+        const cell = book.cells[key] ?? (book.cells[key] = { filePath: "", hasContent: false });
+        cell.filePath = file.path;
+        cell.hasContent = body.trim().length > 0;
+      } else {
+        const srcFile = req.vaultPath
+          ? this.app.vault.getAbstractFileByPath(req.vaultPath)
+          : null;
+        if (!(srcFile instanceof TFile)) {
+          new Notice("找不到库内笔记");
+          return;
+        }
+        const targetPath = buildChapterPath(book, chapter.id, dim.name);
+        let file = srcFile;
+        if (req.move && srcFile.path !== targetPath) {
+          await this.app.fileManager.renameFile(srcFile, targetPath);
+          const moved = this.app.vault.getAbstractFileByPath(targetPath);
+          if (moved instanceof TFile) file = moved;
+        }
+        const cell = book.cells[key] ?? (book.cells[key] = { filePath: "", hasContent: false });
+        cell.filePath = file.path;
+        cell.hasContent = true;
+      }
+      await this.plugin.saveSettings();
+      this.renderMatrix();
+      new Notice("导入成功");
+    } catch (e) {
+      new Notice("导入失败");
+    }
   }
 
   // -------------------------------------------------------- book settings
@@ -1531,15 +1726,13 @@ export class ChaiShuMatrixView extends ItemView {
     new BookCreateModal(this.app, async (title, author) => {
       const settings = this.settings;
       const dims = settings.defaultDimensionNames.split(/[,，、\s]+/).filter(Boolean);
-      const dimensions: Dimension[] = dims.map((name, i) => {
-        const d: Dimension = {
-          id: uid("d"),
-          name: sanitizeFileName(name),
-          color: DIMENSION_COLORS[i % DIMENSION_COLORS.length],
-        };
-        if (name === "情绪") d.type = "chart";
-        return d;
-      });
+      const dimensions: Dimension[] = dims.map((name, i) => ({
+        id: uid("d"),
+        name: sanitizeFileName(name),
+        color: DIMENSION_COLORS[i % DIMENSION_COLORS.length],
+        isChart: name === "情绪",
+        yAxisLabels: [...DEFAULT_Y_AXIS_LABELS],
+      }));
       const count = Math.max(1, Math.min(500, settings.defaultChapterCount || 5));
       const structure: NodeData[] = [];
       for (let i = 1; i <= count; i++) {
@@ -1559,10 +1752,18 @@ export class ChaiShuMatrixView extends ItemView {
         storagePath: settings.defaultStoragePath || "",
         dimensions: dimensions.length
           ? dimensions
-          : [{ id: uid("d"), name: "情绪", color: DIMENSION_COLORS[0], type: "chart" }],
+          : [
+              {
+                id: uid("d"),
+                name: "情绪",
+                color: DIMENSION_COLORS[0],
+                isChart: true,
+                yAxisLabels: [...DEFAULT_Y_AXIS_LABELS],
+              },
+            ],
         structure,
         cells: {},
-        chartData: {},
+        chapterEmotions: {},
       };
       settings.books.push(book);
       settings.activeBookId = book.id;

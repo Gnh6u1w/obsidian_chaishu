@@ -1,6 +1,8 @@
 import { App, normalizePath, PluginSettingTab, Setting } from "obsidian";
 import type ChaiShuMatrixPlugin from "./main";
 import { ConfirmModal } from "./modals";
+import { normalizeYAxisLabels, sanitizeFileName } from "./store";
+import type { BookData, Dimension } from "./types";
 
 export class ChaiShuSettingTab extends PluginSettingTab {
   plugin: ChaiShuMatrixPlugin;
@@ -41,12 +43,13 @@ export class ChaiShuSettingTab extends PluginSettingTab {
       .setName("默认拆书存放位置")
       .setDesc("新建拆书时的默认归档文件夹（留空 = 库根目录）")
       .addText((t) => {
-        t.setValue(this.plugin.settings.defaultStoragePath)
-          .onChange((v) => {
-            this.plugin.settings.defaultStoragePath = normalizePath(v);
-            void this.plugin.saveSettings();
-          });
+        t.setValue(this.plugin.settings.defaultStoragePath).onChange((v) => {
+          this.plugin.settings.defaultStoragePath = normalizePath(v);
+          void this.plugin.saveSettings();
+        });
       });
+
+    this.renderDimensionManagement(containerEl);
 
     containerEl.createEl("h3", { text: "危险操作" });
 
@@ -70,5 +73,88 @@ export class ChaiShuSettingTab extends PluginSettingTab {
           }).open();
         });
       });
+  }
+
+  private renderDimensionManagement(containerEl: HTMLElement): void {
+    containerEl.createEl("h3", { text: "维度管理" });
+    const books = this.plugin.settings.books;
+    if (books.length === 0) {
+      containerEl.createEl("p", { text: "暂无拆书项目" }).addClass("chs-setting-note");
+      return;
+    }
+
+    let bookId = books[0].id;
+    new Setting(containerEl).setName("选择拆书").addDropdown((d) => {
+      for (const b of books) d.addOption(b.id, b.bookInfo.title || b.id);
+      d.setValue(bookId);
+      d.onChange((v) => {
+        bookId = v;
+        this.display();
+      });
+    });
+
+    const book = books.find((b) => b.id === bookId) ?? books[0];
+    if (book.dimensions.length === 0) {
+      containerEl.createEl("p", { text: "该项目暂无维度" }).addClass("chs-setting-note");
+      return;
+    }
+
+    for (const dim of book.dimensions) {
+      this.renderDimensionRow(containerEl, book, dim);
+    }
+  }
+
+  private renderDimensionRow(containerEl: HTMLElement, book: BookData, dim: Dimension): void {
+    new Setting(containerEl)
+      .setName("维度标签")
+      .setDesc("修改后，表头与已有笔记的「维度」属性自动同步")
+      .addText((t) => {
+        t.setValue(dim.name);
+        t.inputEl.addEventListener("blur", () => {
+          const name = sanitizeFileName(t.getValue());
+          if (name && name !== dim.name) {
+            void this.plugin.renameDimension(book.id, dim.id, name);
+          }
+        });
+        t.inputEl.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") t.inputEl.blur();
+        });
+      })
+      .addColorPicker((cp) => {
+        cp.setValue(dim.color).onChange((c) => {
+          dim.color = c;
+          void this.plugin.saveSettings();
+          this.plugin.notifyViews();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName(dim.name + " · 情绪折线")
+      .setDesc("开启后该维度拥有专属折线绘制")
+      .addToggle((t) => {
+        t.setValue(dim.isChart).onChange((v) => {
+          dim.isChart = v;
+          void this.plugin.saveSettings();
+          this.plugin.notifyViews();
+          this.display();
+        });
+      });
+
+    if (dim.isChart) {
+      new Setting(containerEl)
+        .setName("Y轴 5 层级名称")
+        .setDesc("从低到高 5 层，逗号分隔（第 3 层为基准线）")
+        .addText((t) => {
+          t.setValue(dim.yAxisLabels.join(","));
+          t.inputEl.addEventListener("blur", () => {
+            dim.yAxisLabels = normalizeYAxisLabels(t.getValue().split(/[,，、\s]+/).filter(Boolean));
+            void this.plugin.saveSettings();
+            this.plugin.notifyViews();
+          });
+          t.inputEl.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") t.inputEl.blur();
+          });
+        });
+    }
   }
 }

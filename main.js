@@ -42,6 +42,14 @@ var DEFAULT_SETTINGS = {
   activeBookId: "",
   books: []
 };
+var EMOTION_LEVELS = 5;
+var DEFAULT_Y_AXIS_LABELS = [
+  "\u6781\u5DEE",
+  "\u4F4E\u843D",
+  "\u5E73\u7A33",
+  "\u9AD8\u6602",
+  "\u6781\u597D"
+];
 var DIMENSION_COLORS = [
   "#3b82f6",
   // blue
@@ -70,7 +78,6 @@ var DIMENSION_COLOR_NAMES = [
   "\u9752",
   "\u9EC4"
 ];
-var CHART_VALUE_MAX = 10;
 
 // store.ts
 var import_obsidian = require("obsidian");
@@ -287,6 +294,15 @@ async function createChapterNote(vault, book, chapterId, dimension, body) {
   }
   return await vault.create(filePath, content);
 }
+function normalizeYAxisLabels(labels) {
+  const out = [];
+  const src = Array.isArray(labels) ? labels : [];
+  for (let i = 0; i < EMOTION_LEVELS; i++) {
+    const v = src[i];
+    out.push(typeof v === "string" && v.trim() ? v.trim() : DEFAULT_Y_AXIS_LABELS[i]);
+  }
+  return out;
+}
 async function createSummaryNote(vault, book, nodeId, body) {
   const filePath = buildSummaryPath(book, nodeId);
   const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
@@ -346,12 +362,14 @@ var DimensionModal = class extends import_obsidian2.Modal {
     this.opts = opts;
     this.name = "";
     this.color = DIMENSION_COLORS[0];
-    this.chart = false;
+    this.isChart = false;
+    this.yAxisLabels = [...DEFAULT_Y_AXIS_LABELS];
     this.isEdit = false;
     if (opts.initial) {
       this.name = opts.initial.name;
       this.color = opts.initial.color;
-      this.chart = opts.initial.type === "chart";
+      this.isChart = opts.initial.isChart;
+      this.yAxisLabels = normalizeYAxisLabels(opts.initial.yAxisLabels);
       this.isEdit = true;
     }
   }
@@ -388,7 +406,12 @@ var DimensionModal = class extends import_obsidian2.Modal {
         }
       });
     });
-    new import_obsidian2.Setting(contentEl).setName("\u5F00\u542F\u60C5\u7EEA\u6298\u7EBF\u753B\u677F").setDesc("\u8BE5\u7EF4\u5EA6\u5C06\u663E\u793A\u300C\u60C5\u7EEA\u6298\u7EBF\u300D\u7ED8\u5236\u9762\u677F\uFF08type = chart\uFF09").addToggle((t) => t.setValue(this.chart).onChange((v) => this.chart = v));
+    new import_obsidian2.Setting(contentEl).setName("\u5F00\u542F\u60C5\u7EEA\u6298\u7EBF\u753B\u677F").setDesc("\u5F00\u542F\u540E\uFF0C\u8BE5\u7EF4\u5EA6\u62E5\u6709\u4E13\u5C5E\u7684\u6298\u7EBF\u56FE\u7ED8\u5236\u529F\u80FD").addToggle((t) => t.setValue(this.isChart).onChange((v) => this.isChart = v));
+    new import_obsidian2.Setting(contentEl).setName("Y\u8F74 5 \u5C42\u7EA7\u540D\u79F0").setDesc("\u4ECE\u4F4E\u5230\u9AD8 5 \u5C42\uFF0C\u7528\u9017\u53F7\u5206\u9694\uFF08\u7B2C 3 \u5C42\u4E3A\u57FA\u51C6\u7EBF\uFF09").addText((t) => {
+      t.setValue(this.yAxisLabels.join(",")).onChange((v) => {
+        this.yAxisLabels = normalizeYAxisLabels(v.split(/[,，、\s]+/).filter(Boolean));
+      });
+    });
     const footer = contentEl.createDiv("chs-modal-actions");
     new import_obsidian2.ButtonComponent(footer).setButtonText("\u53D6\u6D88").onClick(() => this.close());
     if (this.isEdit && this.opts.onDelete) {
@@ -407,7 +430,7 @@ var DimensionModal = class extends import_obsidian2.Modal {
       return;
     }
     this.close();
-    this.opts.onSave(name, this.color || DIMENSION_COLORS[0], this.chart);
+    this.opts.onSave(name, this.color || DIMENSION_COLORS[0], this.isChart, this.yAxisLabels);
   }
   onClose() {
     this.contentEl.empty();
@@ -513,7 +536,7 @@ var StoragePathModal = class extends import_obsidian2.Modal {
       text: "\u8BE5\u8DEF\u5F84\u4E0B\u5C06\u81EA\u52A8\u751F\u6210 \u300A\u4E66\u540D\u300B/\u5377/\u5355\u5143/\u7AE0\u8282 \u7684\u5C42\u7EA7\u6587\u4EF6\u5939\u3002"
     });
     new import_obsidian2.Setting(contentEl).setName("\u5B58\u653E\u8DEF\u5F84").setDesc("\u7559\u7A7A = \u5E93\u6839\u76EE\u5F55").addText((t) => {
-      t.setPlaceholder("\u4F8B\u5982\uFF1A\u62C6\u4E66\u9879\u76EE").setValue(this.opts.current).onChange((v) => this.pathInput = t.inputEl).inputEl.addClass("chs-input");
+      t.setPlaceholder("\u4F8B\u5982\uFF1A\u62C6\u4E66\u9879\u76EE").setValue(this.opts.current).inputEl.addClass("chs-input");
       this.pathInput = t.inputEl;
       t.inputEl.addEventListener("keydown", (e) => {
         if (e.key === "Enter") this.commit();
@@ -639,20 +662,189 @@ var WallpaperModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
 };
+var NoteSuggestModal = class extends import_obsidian2.FuzzySuggestModal {
+  constructor(app, onChoose) {
+    super(app);
+    this.onChoose = onChoose;
+  }
+  getItems() {
+    return this.app.vault.getMarkdownFiles();
+  }
+  getItemText(item) {
+    return item.path;
+  }
+  onChooseItem(item) {
+    this.onChoose(item);
+  }
+};
+var ImportModal = class extends import_obsidian2.Modal {
+  constructor(app, opts) {
+    var _a, _b, _c, _d;
+    super(app);
+    this.opts = opts;
+    this.sourceType = null;
+    this.sourceName = "";
+    this.content = "";
+    this.vaultPath = "";
+    this.chapterId = "";
+    this.dimensionId = "";
+    this.move = true;
+    this.chapterId = (_b = (_a = opts.chapters[0]) == null ? void 0 : _a.id) != null ? _b : "";
+    this.dimensionId = (_d = (_c = opts.dimensions[0]) == null ? void 0 : _c.id) != null ? _d : "";
+  }
+  onOpen() {
+    this.render();
+  }
+  render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-modal");
+    contentEl.createEl("h2", { text: "\u5BFC\u5165\u7B14\u8BB0" });
+    const srcRow = contentEl.createDiv("chs-modal-actions");
+    const extBtn = srcRow.createEl("button", { cls: "chs-btn", text: "\u5BFC\u5165\u672C\u5730\u6587\u4EF6 (.md/.txt)" });
+    extBtn.addEventListener("click", () => this.pickFile());
+    const vaultBtn = srcRow.createEl("button", { cls: "chs-btn", text: "\u4ECE\u5E93\u4E2D\u9009\u62E9\u7B14\u8BB0" });
+    vaultBtn.addEventListener("click", () => this.pickVaultNote());
+    this.statusEl = contentEl.createDiv("chs-import-status");
+    this.updateStatus();
+    new import_obsidian2.Setting(contentEl).setName("\u76EE\u6807\u7AE0\u8282").addDropdown((d) => {
+      for (const c of this.opts.chapters) d.addOption(c.id, c.name);
+      d.setValue(this.chapterId);
+      d.onChange((v) => this.chapterId = v);
+    });
+    new import_obsidian2.Setting(contentEl).setName("\u76EE\u6807\u7EF4\u5EA6").addDropdown((d) => {
+      for (const dm of this.opts.dimensions) d.addOption(dm.id, dm.name);
+      d.setValue(this.dimensionId);
+      d.onChange((v) => this.dimensionId = v);
+    });
+    if (this.sourceType === "vault") {
+      new import_obsidian2.Setting(contentEl).setName("\u79FB\u52A8\u5230\u62C6\u4E66\u6587\u4EF6\u5939").setDesc("\u82E5\u7B14\u8BB0\u4E0D\u5728\u62C6\u4E66\u6587\u4EF6\u5939\u4E2D\uFF0C\u5BFC\u5165\u65F6\u5C06\u5176\u79FB\u52A8\u8FC7\u53BB").addToggle((t) => t.setValue(this.move).onChange((v) => this.move = v));
+    }
+    const footer = contentEl.createDiv("chs-modal-actions");
+    new import_obsidian2.ButtonComponent(footer).setButtonText("\u53D6\u6D88").onClick(() => this.close());
+    new import_obsidian2.ButtonComponent(footer).setButtonText("\u5BFC\u5165").setCta().onClick(() => this.submit());
+  }
+  pickFile() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".md,.txt,text/markdown,text/plain";
+    input.addEventListener("change", async () => {
+      var _a;
+      const f = (_a = input.files) == null ? void 0 : _a[0];
+      if (!f) return;
+      this.sourceType = "external";
+      this.sourceName = f.name;
+      this.content = await f.text();
+      this.render();
+    });
+    input.click();
+  }
+  pickVaultNote() {
+    new NoteSuggestModal(this.app, (file) => {
+      this.sourceType = "vault";
+      this.sourceName = file.name;
+      this.vaultPath = file.path;
+      this.content = "";
+      this.render();
+    }).open();
+  }
+  updateStatus() {
+    if (!this.statusEl) return;
+    this.statusEl.empty();
+    if (!this.sourceType) {
+      this.statusEl.setText("\u5C1A\u672A\u9009\u62E9\u6765\u6E90\u7B14\u8BB0");
+    } else if (this.sourceType === "external") {
+      this.statusEl.setText("\u5DF2\u9009\u6587\u4EF6\uFF1A" + this.sourceName);
+    } else {
+      this.statusEl.setText("\u5DF2\u9009\u5E93\u5185\u7B14\u8BB0\uFF1A" + this.vaultPath);
+    }
+  }
+  submit() {
+    if (!this.sourceType) {
+      new import_obsidian2.Notice("\u8BF7\u5148\u9009\u62E9\u6765\u6E90\u7B14\u8BB0");
+      return;
+    }
+    if (!this.chapterId) {
+      new import_obsidian2.Notice("\u8BF7\u9009\u62E9\u76EE\u6807\u7AE0\u8282");
+      return;
+    }
+    if (!this.dimensionId) {
+      new import_obsidian2.Notice("\u8BF7\u9009\u62E9\u76EE\u6807\u7EF4\u5EA6");
+      return;
+    }
+    this.close();
+    this.opts.onImport({
+      sourceType: this.sourceType,
+      sourceName: this.sourceName,
+      content: this.sourceType === "external" ? this.content : void 0,
+      vaultPath: this.sourceType === "vault" ? this.vaultPath : void 0,
+      chapterId: this.chapterId,
+      dimensionId: this.dimensionId,
+      move: this.move
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var MoveNodeModal = class extends import_obsidian2.Modal {
+  constructor(app, opts) {
+    super(app);
+    this.opts = opts;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-modal");
+    contentEl.createEl("h2", { text: "\u79FB\u52A8\u5230\u2026" });
+    const list = contentEl.createDiv("chs-folder-list");
+    const root = list.createEl("button", { cls: "chs-folder-item" });
+    root.setText("\u{1F4C1} \u9876\u5C42\uFF08\u6839\uFF09");
+    root.addEventListener("click", () => {
+      this.close();
+      this.opts.onSelect(null);
+    });
+    for (const t of this.opts.targets) {
+      const btn = list.createEl("button", { cls: "chs-folder-item" });
+      btn.setText((t.type === "volume" ? "\u{1F4DA} " : "\u{1F4E6} ") + t.name);
+      btn.addEventListener("click", () => {
+        this.close();
+        this.opts.onSelect(t.id);
+      });
+    }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 
 // matrix-view.ts
 var MAX_PREVIEW = 300;
 var SVG_NS = "http://www.w3.org/2000/svg";
-var CHART_SLOT = 44;
-var CHART_PAD_LEFT = 40;
-var CHART_PAD_RIGHT = 12;
+var CHART_PLOT_W = 520;
+var CHART_PAD_LEFT = 46;
+var CHART_PAD_RIGHT = 16;
 var CHART_PAD_TOP = 14;
 var CHART_PAD_BOTTOM = 30;
-var CHART_HEIGHT = 200;
+var CHART_HEIGHT = 210;
 function makeSvg(tag, attrs) {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
+}
+function aggregateEmotions(book, chapters) {
+  const n = chapters.length;
+  const out = [];
+  chapters.forEach((ch, i) => {
+    var _a;
+    const pts = (_a = book.chapterEmotions[ch.id]) != null ? _a : [];
+    const start = n > 0 ? i / n * 100 : 0;
+    const w = n > 0 ? 100 / n : 100;
+    for (const p of pts) {
+      out.push({ x: start + p.x / 100 * w, y: p.y });
+    }
+  });
+  return out.sort((a, b) => a.x - b.x);
 }
 var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
   constructor(leaf, plugin) {
@@ -662,6 +854,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     this.saveTimer = null;
     this.chartSaveTimer = null;
     // Chart state
+    this.chartPanelEl = null;
     this.chartBodyEl = null;
     this.chartSvgEl = null;
     this.chartPolyEl = null;
@@ -670,6 +863,8 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     this.chartEraser = false;
     this.chartPointerDown = false;
     this.activeChartDimId = "";
+    this.chartLevel = "chapter";
+    this.activeChartNodeId = "";
     // Drag state
     this.dragNodeId = null;
     this.dragOverTargetId = null;
@@ -728,6 +923,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     const prevScroll = this.matrixScrollEl ? { left: this.matrixScrollEl.scrollLeft, top: this.matrixScrollEl.scrollTop } : null;
     (_a = this.observer) == null ? void 0 : _a.disconnect();
     this.observer = null;
+    this.chartPanelEl = null;
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("chs-view");
@@ -803,6 +999,14 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       cls: "chs-btn chs-btn-ghost chs-btn-danger-text"
     });
     delBtn.addEventListener("click", () => this.deleteCurrentBook());
+    const settingsBtn = row.createEl("button", { cls: "chs-icon-btn chs-icon-btn-lg" });
+    settingsBtn.setAttribute("aria-label", "\u62C6\u4E66\u8BBE\u7F6E");
+    (0, import_obsidian3.setIcon)(settingsBtn, "settings");
+    settingsBtn.addEventListener("click", () => this.openBookSettingsMenu(settingsBtn));
+    const wallpaperBtn = row.createEl("button", { cls: "chs-icon-btn chs-icon-btn-lg" });
+    wallpaperBtn.setAttribute("aria-label", "\u4E0A\u4F20\u58C1\u7EB8");
+    (0, import_obsidian3.setIcon)(wallpaperBtn, "image");
+    wallpaperBtn.addEventListener("click", () => this.openWallpaper());
   }
   buildEmptyState() {
     const empty = this.wrapEl.createDiv("chs-empty");
@@ -830,19 +1034,6 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       book.bookInfo.score = v;
       this.scheduleSave();
     });
-    const actions = info.createDiv("chs-bookinfo-actions");
-    const settingsBtn = actions.createEl("button", {
-      cls: "chs-icon-btn chs-icon-btn-lg"
-    });
-    settingsBtn.setAttribute("aria-label", "\u62C6\u4E66\u8BBE\u7F6E");
-    (0, import_obsidian3.setIcon)(settingsBtn, "settings");
-    settingsBtn.addEventListener("click", () => this.openBookSettingsMenu(settingsBtn));
-    const wallpaperBtn = actions.createEl("button", {
-      cls: "chs-icon-btn chs-icon-btn-lg"
-    });
-    wallpaperBtn.setAttribute("aria-label", "\u4E0A\u4F20\u58C1\u7EB8");
-    (0, import_obsidian3.setIcon)(wallpaperBtn, "image");
-    wallpaperBtn.addEventListener("click", () => this.openWallpaper());
   }
   makeField(parent, label, value, onChange) {
     const field = parent.createDiv("chs-field");
@@ -884,6 +1075,8 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     addVol.addEventListener("click", () => this.addVolume());
     const addUnit = mid.createEl("button", { text: "\uFF0B \u6DFB\u52A0\u5C0F\u5355\u5143", cls: "chs-btn" });
     addUnit.addEventListener("click", () => this.addUnit());
+    const importBtn = mid.createEl("button", { text: "\u{1F4E5} \u5BFC\u5165", cls: "chs-btn" });
+    importBtn.addEventListener("click", () => this.openImportModal());
     this.statsEl = tb.createDiv("chs-stats");
   }
   readAddCount(input) {
@@ -891,18 +1084,44 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     if (!Number.isFinite(n) || n < 1) return 1;
     return Math.min(500, n);
   }
-  buildChartPanel() {
+  // ================================================================ chart
+  chartX(x) {
+    return CHART_PAD_LEFT + x / 100 * CHART_PLOT_W;
+  }
+  chartY(level) {
+    const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
+    return CHART_PAD_TOP + (EMOTION_LEVELS - level) / (EMOTION_LEVELS - 1) * plotH;
+  }
+  levelNodes() {
     const book = this.book;
-    const chartDims = book.dimensions.filter((d) => d.type === "chart");
+    if (!book) return [];
+    if (this.chartLevel === "chapter") return collectChapters(book.structure);
+    if (this.chartLevel === "unit") return collectUnits(book.structure);
+    return collectVolumes(book.structure);
+  }
+  levelLabel() {
+    return this.chartLevel === "chapter" ? "\u7AE0\u8282" : this.chartLevel === "unit" ? "\u5355\u5143" : "\u5377";
+  }
+  buildChartPanel() {
+    var _a, _b, _c;
+    (_a = this.chartPanelEl) == null ? void 0 : _a.remove();
+    this.chartPanelEl = null;
     this.chartBodyEl = null;
     this.chartSvgEl = null;
     this.chartPolyEl = null;
     this.chartPointsEl = null;
+    const book = this.book;
+    const chartDims = book.dimensions.filter((d) => d.isChart);
     if (chartDims.length === 0) return;
     if (!chartDims.some((d) => d.id === this.activeChartDimId)) {
       this.activeChartDimId = chartDims[0].id;
     }
+    const levelNodes = this.levelNodes();
+    if (!levelNodes.some((n) => n.id === this.activeChartNodeId)) {
+      this.activeChartNodeId = (_c = (_b = levelNodes[0]) == null ? void 0 : _b.id) != null ? _c : "";
+    }
     const panel = this.wrapEl.createDiv("chs-chart-panel");
+    this.chartPanelEl = panel;
     const head = panel.createDiv("chs-chart-head");
     const toggle = head.createSpan("chs-toggle");
     toggle.setText(this.chartCollapsed ? "\u25B6" : "\u25BC");
@@ -925,30 +1144,61 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
         this.renderChart();
       });
     }
-    const eraser = head.createEl("button", {
-      cls: "chs-btn chs-btn-sm",
-      text: "\u{1F9FD} \u6A61\u76AE\u64E6"
+    const levelSel = head.createEl("select");
+    levelSel.addClass("chs-select", "chs-chart-level-select");
+    levelSel.createEl("option", { value: "chapter", text: "\u7AE0\u8282" });
+    levelSel.createEl("option", { value: "unit", text: "\u5355\u5143" });
+    levelSel.createEl("option", { value: "volume", text: "\u5377" });
+    levelSel.value = this.chartLevel;
+    levelSel.addEventListener("change", () => {
+      var _a2, _b2;
+      this.chartLevel = levelSel.value;
+      const ln = this.levelNodes();
+      this.activeChartNodeId = (_b2 = (_a2 = ln[0]) == null ? void 0 : _a2.id) != null ? _b2 : "";
+      this.buildChartPanel();
     });
-    eraser.addEventListener("click", () => {
-      this.chartEraser = !this.chartEraser;
-      eraser.toggleClass("chs-btn-primary", this.chartEraser);
+    const nodeSel = head.createEl("select");
+    nodeSel.addClass("chs-select", "chs-chart-node-select");
+    for (const n of levelNodes) {
+      const o = nodeSel.createEl("option");
+      o.value = n.id;
+      o.textContent = n.name;
+    }
+    nodeSel.value = this.activeChartNodeId;
+    nodeSel.addEventListener("change", () => {
+      this.activeChartNodeId = nodeSel.value;
+      this.renderChart();
     });
-    const clear = head.createEl("button", {
-      cls: "chs-btn chs-btn-sm chs-btn-ghost",
-      text: "\u6E05\u9664"
-    });
-    clear.addEventListener("click", () => {
-      const b = this.book;
-      if (b) {
-        b.chartData[this.activeChartDimId] = [];
-        void this.plugin.saveSettings();
-        this.renderChart();
-      }
-    });
+    if (this.chartLevel === "chapter") {
+      const eraser = head.createEl("button", {
+        cls: "chs-btn chs-btn-sm",
+        text: "\u{1F9FD} \u6A61\u76AE\u64E6"
+      });
+      eraser.addEventListener("click", () => {
+        this.chartEraser = !this.chartEraser;
+        eraser.toggleClass("chs-btn-primary", this.chartEraser);
+      });
+      const clear = head.createEl("button", {
+        cls: "chs-btn chs-btn-sm chs-btn-ghost",
+        text: "\u6E05\u9664"
+      });
+      clear.addEventListener("click", () => {
+        const b = this.book;
+        const n = b ? findNode(b.structure, this.activeChartNodeId) : null;
+        if (b && n) {
+          b.chapterEmotions[n.id] = [];
+          void this.plugin.saveSettings();
+          this.renderChart();
+        }
+      });
+    } else {
+      head.createSpan("chs-chart-readonly").setText("\uFF08\u53EA\u8BFB\u6C47\u603B\uFF09");
+    }
     this.chartBodyEl = panel.createDiv("chs-chart-body");
     this.renderChart();
   }
   renderChart() {
+    var _a, _b, _c;
     const book = this.book;
     if (this.chartBodyEl) this.chartBodyEl.toggleClass("is-hidden", this.chartCollapsed);
     if (!this.chartBodyEl || this.chartCollapsed) return;
@@ -958,96 +1208,92 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     this.chartPointsEl = null;
     if (!book) return;
     const dim = book.dimensions.find((d) => d.id === this.activeChartDimId);
-    if (!dim) return;
-    const chapters = collectChapters(book.structure);
-    const n = chapters.length;
-    if (n === 0) {
-      this.chartBodyEl.createDiv("chs-chart-empty").setText("\u6682\u65E0\u7AE0\u8282\uFF0C\u5148\u6DFB\u52A0\u7AE0\u8282\u5373\u53EF\u7ED8\u5236\u60C5\u7EEA\u6298\u7EBF");
+    if (!dim || !dim.isChart) return;
+    let node = this.activeChartNodeId ? findNode(book.structure, this.activeChartNodeId) : null;
+    if (!node) {
+      const ln = this.levelNodes();
+      node = (_a = ln[0]) != null ? _a : null;
+      this.activeChartNodeId = (_b = node == null ? void 0 : node.id) != null ? _b : "";
+    }
+    if (!node) {
+      this.chartBodyEl.createDiv("chs-chart-empty").setText("\u6682\u65E0" + this.levelLabel() + "\uFF0C\u5148\u521B\u5EFA\u5BF9\u5E94\u5C42\u7EA7\u8282\u70B9");
       return;
     }
-    const plotW = n * CHART_SLOT;
-    const totalW = CHART_PAD_LEFT + plotW + CHART_PAD_RIGHT;
+    const editable = this.chartLevel === "chapter" && node.type === "chapter";
+    const labels = normalizeYAxisLabels(dim.yAxisLabels);
     const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-    const xCenter = (i) => CHART_PAD_LEFT + i * CHART_SLOT + CHART_SLOT / 2;
-    const yValue = (v) => CHART_PAD_TOP + (CHART_VALUE_MAX - v) / CHART_VALUE_MAX * plotH;
+    const totalW = CHART_PAD_LEFT + CHART_PLOT_W + CHART_PAD_RIGHT;
     const svg = makeSvg("svg", {
-      width: String(Math.max(totalW, 120)),
+      width: String(totalW),
       height: String(CHART_HEIGHT)
     });
     svg.setAttribute("class", "chs-chart-svg");
-    svg.style.touchAction = "none";
-    for (const v of [0, 5, 10]) {
-      const y = yValue(v);
+    svg.style.touchAction = editable ? "none" : "auto";
+    for (let level = 1; level <= EMOTION_LEVELS; level++) {
+      const y = this.chartY(level);
+      const isBaseline = level === 3;
       const line = makeSvg("line", {
         x1: String(CHART_PAD_LEFT),
-        x2: String(totalW - CHART_PAD_RIGHT),
+        x2: String(CHART_PAD_LEFT + CHART_PLOT_W),
         y1: String(y),
         y2: String(y)
       });
       line.style.stroke = "var(--background-modifier-border)";
-      line.setAttribute("stroke-width", "1");
+      line.setAttribute("stroke-width", isBaseline ? "1.5" : "1");
+      if (isBaseline) line.setAttribute("stroke-dasharray", "4 3");
       svg.appendChild(line);
       const lbl = makeSvg("text", {
         x: String(CHART_PAD_LEFT - 8),
         y: String(y + 4),
         "text-anchor": "end"
       });
-      lbl.textContent = String(v);
-      lbl.style.fill = "var(--text-muted)";
-      lbl.setAttribute("font-size", "10");
+      lbl.textContent = (_c = labels[level - 1]) != null ? _c : String(level);
+      lbl.style.fill = isBaseline ? "var(--text-normal)" : "var(--text-muted)";
+      lbl.setAttribute("font-size", "11");
+      if (isBaseline) lbl.setAttribute("font-weight", "600");
       svg.appendChild(lbl);
     }
-    for (let i = 0; i < n; i++) {
-      const x = xCenter(i);
-      const line = makeSvg("line", {
-        x1: String(x),
-        x2: String(x),
-        y1: String(CHART_PAD_TOP),
-        y2: String(CHART_PAD_TOP + plotH)
-      });
-      line.style.stroke = "var(--background-modifier-border)";
-      line.setAttribute("stroke-width", "1");
-      svg.appendChild(line);
-    }
-    if (n <= 24) {
-      for (let i = 0; i < n; i++) {
-        const lbl = makeSvg("text", {
-          x: String(xCenter(i)),
-          y: String(CHART_HEIGHT - 8),
-          "text-anchor": "middle"
-        });
-        lbl.textContent = String(i + 1);
-        lbl.style.fill = "var(--text-muted)";
-        lbl.setAttribute("font-size", "9");
-        svg.appendChild(lbl);
-      }
-    }
+    const xAxis = makeSvg("line", {
+      x1: String(CHART_PAD_LEFT),
+      x2: String(CHART_PAD_LEFT + CHART_PLOT_W),
+      y1: String(CHART_PAD_TOP + plotH),
+      y2: String(CHART_PAD_TOP + plotH)
+    });
+    xAxis.style.stroke = "var(--background-modifier-border)";
+    xAxis.setAttribute("stroke-width", "1");
+    svg.appendChild(xAxis);
     const poly = makeSvg("polyline", {
       points: "",
       fill: "none",
-      "stroke-width": "2.5",
+      "stroke-width": editable ? "2.5" : "3",
       "stroke-linejoin": "round",
       "stroke-linecap": "round"
     });
     poly.setAttribute("stroke", dim.color);
+    if (!editable) poly.setAttribute("opacity", "0.7");
     svg.appendChild(poly);
     this.chartPolyEl = poly;
     const pointsG = makeSvg("g", {});
     svg.appendChild(pointsG);
     this.chartPointsEl = pointsG;
-    svg.addEventListener("pointerdown", (e) => {
-      e.preventDefault();
-      this.chartPointerDown = true;
-      this.handleChartPointer(e);
-    });
-    svg.addEventListener("pointermove", (e) => {
-      if (this.chartPointerDown) this.handleChartPointer(e);
-    });
-    const stop = () => {
-      this.chartPointerDown = false;
-    };
-    svg.addEventListener("pointerup", stop);
-    svg.addEventListener("pointerleave", stop);
+    if (editable) {
+      svg.style.cursor = "crosshair";
+      svg.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        this.chartPointerDown = true;
+        this.handleChartPointer(e);
+      });
+      svg.addEventListener("pointermove", (e) => {
+        if (this.chartPointerDown) this.handleChartPointer(e);
+      });
+      const stop = () => {
+        this.chartPointerDown = false;
+      };
+      svg.addEventListener("pointerup", stop);
+      svg.addEventListener("pointerleave", stop);
+    } else {
+      svg.style.pointerEvents = "none";
+    }
     this.chartBodyEl.appendChild(svg);
     this.chartSvgEl = svg;
     this.updateChartLine();
@@ -1056,30 +1302,25 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     var _a;
     const book = this.book;
     const dim = book == null ? void 0 : book.dimensions.find((d) => d.id === this.activeChartDimId);
-    if (!book || !dim || !this.chartPolyEl || !this.chartPointsEl) return;
-    const chapters = collectChapters(book.structure);
-    const points = (_a = book.chartData[this.activeChartDimId]) != null ? _a : [];
-    const valueByChapter = /* @__PURE__ */ new Map();
-    for (const p of points) valueByChapter.set(p.chapterId, p.value);
-    const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-    const xCenter = (i) => CHART_PAD_LEFT + i * CHART_SLOT + CHART_SLOT / 2;
-    const yValue = (v) => CHART_PAD_TOP + (CHART_VALUE_MAX - v) / CHART_VALUE_MAX * plotH;
-    const linePts = [];
-    for (let i = 0; i < chapters.length; i++) {
-      const v = valueByChapter.get(chapters[i].id);
-      if (v != null) linePts.push(xCenter(i) + "," + yValue(v));
+    if (!book || !dim || !dim.isChart || !this.chartPolyEl || !this.chartPointsEl) return;
+    const node = this.activeChartNodeId ? findNode(book.structure, this.activeChartNodeId) : null;
+    if (!node) return;
+    let points;
+    if (this.chartLevel === "chapter" && node.type === "chapter") {
+      points = ((_a = book.chapterEmotions[node.id]) != null ? _a : []).slice().sort((a, b) => a.x - b.x);
+    } else {
+      points = aggregateEmotions(book, node.type === "chapter" ? [node] : collectChapters([node]));
     }
+    const linePts = points.map((p) => this.chartX(p.x) + "," + this.chartY(p.y));
     this.chartPolyEl.setAttribute("points", linePts.join(" "));
     this.chartPolyEl.setAttribute("stroke", dim.color);
     while (this.chartPointsEl.firstChild) {
       this.chartPointsEl.removeChild(this.chartPointsEl.firstChild);
     }
-    for (let i = 0; i < chapters.length; i++) {
-      const v = valueByChapter.get(chapters[i].id);
-      if (v == null) continue;
+    for (const p of points) {
       const c = makeSvg("circle", {
-        cx: String(xCenter(i)),
-        cy: String(yValue(v)),
+        cx: String(this.chartX(p.x)),
+        cy: String(this.chartY(p.y)),
         r: "4"
       });
       c.setAttribute("fill", dim.color);
@@ -1087,46 +1328,37 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     }
   }
   handleChartPointer(e) {
-    const book = this.book;
-    if (!book) return;
-    const dimId = this.activeChartDimId;
-    if (!dimId) return;
-    const chapters = collectChapters(book.structure);
-    const n = chapters.length;
-    if (n === 0) return;
-    const svg = e.currentTarget;
-    const rect = svg.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const slot = Math.floor((x - CHART_PAD_LEFT) / CHART_SLOT);
-    if (slot < 0 || slot >= n) return;
-    const chapterId = chapters[slot].id;
-    if (this.chartEraser) {
-      this.removeChartPoint(dimId, chapterId);
-    } else {
-      const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-      let value = (CHART_PAD_TOP + plotH - y) / plotH * CHART_VALUE_MAX;
-      value = Math.max(0, Math.min(CHART_VALUE_MAX, Math.round(value)));
-      this.setChartPoint(dimId, chapterId, value);
-    }
-  }
-  setChartPoint(dimId, chapterId, value) {
     var _a;
     const book = this.book;
     if (!book) return;
-    const arr = (_a = book.chartData[dimId]) != null ? _a : book.chartData[dimId] = [];
-    const pt = arr.find((p) => p.chapterId === chapterId);
-    if (pt) pt.value = value;
-    else arr.push({ chapterId, value });
-    this.updateChartLine();
-    this.debounceChartSave();
-  }
-  removeChartPoint(dimId, chapterId) {
-    const book = this.book;
-    if (!book) return;
-    const arr = book.chartData[dimId];
-    if (!arr) return;
-    book.chartData[dimId] = arr.filter((p) => p.chapterId !== chapterId);
+    if (this.chartLevel !== "chapter") return;
+    const node = findNode(book.structure, this.activeChartNodeId);
+    if (!node || node.type !== "chapter") return;
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
+    const arr = (_a = book.chapterEmotions[node.id]) != null ? _a : book.chapterEmotions[node.id] = [];
+    if (this.chartEraser) {
+      const idx = arr.findIndex(
+        (p) => Math.abs(this.chartX(p.x) - px) < 14 && Math.abs(this.chartY(p.y) - py) < 14
+      );
+      if (idx !== -1) arr.splice(idx, 1);
+    } else {
+      const x = Math.max(0, Math.min(100, (px - CHART_PAD_LEFT) / CHART_PLOT_W * 100));
+      const level = Math.max(
+        1,
+        Math.min(
+          EMOTION_LEVELS,
+          Math.round(EMOTION_LEVELS - (py - CHART_PAD_TOP) / plotH * (EMOTION_LEVELS - 1))
+        )
+      );
+      const rx = Math.round(x);
+      const existing = arr.findIndex((p) => Math.abs(p.x - rx) <= 3);
+      if (existing !== -1) arr[existing] = { x: rx, y: level };
+      else arr.push({ x: rx, y: level });
+    }
     this.updateChartLine();
     this.debounceChartSave();
   }
@@ -1136,6 +1368,20 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       this.chartSaveTimer = null;
       void this.plugin.saveSettings();
     }, 300);
+  }
+  openChartForNode(nodeId) {
+    const book = this.book;
+    if (!book) return;
+    const node = findNode(book.structure, nodeId);
+    if (!node) return;
+    if (!book.dimensions.some((d) => d.isChart)) {
+      new import_obsidian3.Notice("\u8BF7\u5148\u5728\u7EF4\u5EA6\u8BBE\u7F6E\u4E2D\u5F00\u542F\u300C\u60C5\u7EEA\u6298\u7EBF\u300D");
+      return;
+    }
+    this.chartLevel = node.type;
+    this.activeChartNodeId = nodeId;
+    this.chartCollapsed = false;
+    this.render();
   }
   // ================================================================ matrix
   buildMatrix() {
@@ -1192,7 +1438,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       th.style.setProperty("--chs-color", dim.color);
       const cap = th.createDiv("chs-capsule");
       cap.createSpan("chs-capsule-dot").style.backgroundColor = dim.color;
-      cap.createSpan("chs-capsule-name").setText(dim.name + (dim.type === "chart" ? " \u{1F4C8}" : ""));
+      cap.createSpan("chs-capsule-name").setText(dim.name + (dim.isChart ? " \u{1F4C8}" : ""));
     }
     const addDimTh = headRow.createEl("th", { cls: "chs-add-dim-head" });
     const addDimBtn = addDimTh.createEl("button", {
@@ -1268,6 +1514,10 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       });
       sbtn.dataset.summaryId = node.id;
     }
+    const chartBtn = td.createEl("button", { cls: "chs-icon-btn chs-node-chart-btn" });
+    chartBtn.dataset.chartNodeId = node.id;
+    chartBtn.setAttribute("aria-label", "\u60C5\u7EEA\u6298\u7EBF");
+    (0, import_obsidian3.setIcon)(chartBtn, "activity");
     const more = td.createEl("button", { cls: "chs-icon-btn chs-node-menu-btn" });
     more.dataset.nodeMenuId = node.id;
     more.setAttribute("aria-label", "\u8282\u70B9\u64CD\u4F5C");
@@ -1408,6 +1658,11 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     const toggleEl = t.closest("[data-toggle-id]");
     if (toggleEl) {
       this.toggleNode(toggleEl.dataset.toggleId);
+      return;
+    }
+    const chartBtn = t.closest("[data-chart-node-id]");
+    if (chartBtn) {
+      this.openChartForNode(chartBtn.dataset.chartNodeId);
       return;
     }
     const menuBtn = t.closest("[data-node-menu-id]");
@@ -1662,6 +1917,9 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       );
     }
     menu.addItem(
+      (i) => i.setTitle("\u79FB\u52A8\u5230\u2026").setIcon("folder-input").onClick(() => this.openMoveNodeModal(nodeId))
+    );
+    menu.addItem(
       (i) => i.setTitle("\u4E0A\u79FB").setIcon("arrow-up").onClick(() => this.moveNodeRelative(nodeId, -1))
     );
     menu.addItem(
@@ -1676,6 +1934,29 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
   openNodeMenu(nodeId, pos) {
     const menu = this.buildNodeMenu(nodeId);
     if (menu) menu.showAtPosition(pos);
+  }
+  openMoveNodeModal(nodeId) {
+    const book = this.book;
+    if (!book) return;
+    const node = findNode(book.structure, nodeId);
+    if (!node) return;
+    const targets = [];
+    if (node.type === "chapter" || node.type === "unit") {
+      for (const v of collectVolumes(book.structure)) {
+        targets.push({ id: v.id, name: v.name, type: "volume" });
+      }
+    }
+    if (node.type === "chapter") {
+      for (const u of collectUnits(book.structure)) {
+        targets.push({ id: u.id, name: u.name, type: "unit" });
+      }
+    }
+    new MoveNodeModal(this.app, {
+      targets,
+      onSelect: (targetId) => {
+        void this.performMove(nodeId, targetId);
+      }
+    }).open();
   }
   // ---------------------------------------------------------- drag & drop
   onDragStart(e) {
@@ -1832,9 +2113,14 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     if (!book) return;
     new DimensionModal(this.app, {
       title: "\u6DFB\u52A0\u65B0\u7EF4\u5EA6",
-      onSave: async (name, color, chart) => {
-        const dim = { id: uid("d"), name: sanitizeFileName(name), color };
-        if (chart || dim.name === "\u60C5\u7EEA") dim.type = "chart";
+      onSave: async (name, color, isChart, yAxisLabels) => {
+        const dim = {
+          id: uid("d"),
+          name: sanitizeFileName(name),
+          color,
+          isChart: isChart || name === "\u60C5\u7EEA",
+          yAxisLabels: normalizeYAxisLabels(yAxisLabels)
+        };
         book.dimensions.push(dim);
         await this.plugin.saveSettings();
         this.render();
@@ -1849,12 +2135,17 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     new DimensionModal(this.app, {
       title: "\u7F16\u8F91\u7EF4\u5EA6",
       initial: dim,
-      onSave: async (name, color, chart) => {
-        dim.name = sanitizeFileName(name);
+      onSave: async (name, color, isChart, yAxisLabels) => {
+        const newName = sanitizeFileName(name);
         dim.color = color;
-        dim.type = chart || dim.name === "\u60C5\u7EEA" ? "chart" : void 0;
-        await this.plugin.saveSettings();
-        this.render();
+        dim.isChart = isChart || newName === "\u60C5\u7EEA";
+        dim.yAxisLabels = normalizeYAxisLabels(yAxisLabels);
+        if (newName !== dim.name) {
+          await this.plugin.renameDimension(book.id, dim.id, newName);
+        } else {
+          await this.plugin.saveSettings();
+          this.render();
+        }
       },
       onDelete: () => {
         new ConfirmModal(this.app, {
@@ -1864,13 +2155,74 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
           danger: true,
           onConfirm: async () => {
             book.dimensions = book.dimensions.filter((d) => d.id !== dimId);
-            delete book.chartData[dimId];
             await this.plugin.saveSettings();
             this.render();
           }
         }).open();
       }
     }).open();
+  }
+  // ---------------------------------------------------------- import
+  openImportModal() {
+    const book = this.book;
+    if (!book) return;
+    const chapters = collectChapters(book.structure).map((c) => ({ id: c.id, name: c.name }));
+    const dimensions = book.dimensions.map((d) => ({ id: d.id, name: d.name }));
+    if (chapters.length === 0) {
+      new import_obsidian3.Notice("\u8BF7\u5148\u6DFB\u52A0\u7AE0\u8282");
+      return;
+    }
+    if (dimensions.length === 0) {
+      new import_obsidian3.Notice("\u8BF7\u5148\u6DFB\u52A0\u7EF4\u5EA6");
+      return;
+    }
+    new ImportModal(this.app, {
+      chapters,
+      dimensions,
+      onImport: (req) => void this.handleImport(req)
+    }).open();
+  }
+  async handleImport(req) {
+    var _a, _b, _c;
+    const book = this.book;
+    if (!book) return;
+    const chapter = findNode(book.structure, req.chapterId);
+    const dim = book.dimensions.find((d) => d.id === req.dimensionId);
+    if (!chapter || !dim) {
+      new import_obsidian3.Notice("\u76EE\u6807\u7AE0\u8282\u6216\u7EF4\u5EA6\u65E0\u6548");
+      return;
+    }
+    const key = cellKey(chapter.id, dim.id);
+    try {
+      if (req.sourceType === "external") {
+        const body = stripFrontmatter((_a = req.content) != null ? _a : "");
+        const file = await createChapterNote(this.app.vault, book, chapter.id, dim, body);
+        const cell = (_b = book.cells[key]) != null ? _b : book.cells[key] = { filePath: "", hasContent: false };
+        cell.filePath = file.path;
+        cell.hasContent = body.trim().length > 0;
+      } else {
+        const srcFile = req.vaultPath ? this.app.vault.getAbstractFileByPath(req.vaultPath) : null;
+        if (!(srcFile instanceof import_obsidian3.TFile)) {
+          new import_obsidian3.Notice("\u627E\u4E0D\u5230\u5E93\u5185\u7B14\u8BB0");
+          return;
+        }
+        const targetPath = buildChapterPath(book, chapter.id, dim.name);
+        let file = srcFile;
+        if (req.move && srcFile.path !== targetPath) {
+          await this.app.fileManager.renameFile(srcFile, targetPath);
+          const moved = this.app.vault.getAbstractFileByPath(targetPath);
+          if (moved instanceof import_obsidian3.TFile) file = moved;
+        }
+        const cell = (_c = book.cells[key]) != null ? _c : book.cells[key] = { filePath: "", hasContent: false };
+        cell.filePath = file.path;
+        cell.hasContent = true;
+      }
+      await this.plugin.saveSettings();
+      this.renderMatrix();
+      new import_obsidian3.Notice("\u5BFC\u5165\u6210\u529F");
+    } catch (e) {
+      new import_obsidian3.Notice("\u5BFC\u5165\u5931\u8D25");
+    }
   }
   // -------------------------------------------------------- book settings
   openBookSettingsMenu(btn) {
@@ -1916,15 +2268,13 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     new BookCreateModal(this.app, async (title, author) => {
       const settings = this.settings;
       const dims = settings.defaultDimensionNames.split(/[,，、\s]+/).filter(Boolean);
-      const dimensions = dims.map((name, i) => {
-        const d = {
-          id: uid("d"),
-          name: sanitizeFileName(name),
-          color: DIMENSION_COLORS[i % DIMENSION_COLORS.length]
-        };
-        if (name === "\u60C5\u7EEA") d.type = "chart";
-        return d;
-      });
+      const dimensions = dims.map((name, i) => ({
+        id: uid("d"),
+        name: sanitizeFileName(name),
+        color: DIMENSION_COLORS[i % DIMENSION_COLORS.length],
+        isChart: name === "\u60C5\u7EEA",
+        yAxisLabels: [...DEFAULT_Y_AXIS_LABELS]
+      }));
       const count = Math.max(1, Math.min(500, settings.defaultChapterCount || 5));
       const structure = [];
       for (let i = 1; i <= count; i++) {
@@ -1941,10 +2291,18 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
           bgOverlay: 0.3
         },
         storagePath: settings.defaultStoragePath || "",
-        dimensions: dimensions.length ? dimensions : [{ id: uid("d"), name: "\u60C5\u7EEA", color: DIMENSION_COLORS[0], type: "chart" }],
+        dimensions: dimensions.length ? dimensions : [
+          {
+            id: uid("d"),
+            name: "\u60C5\u7EEA",
+            color: DIMENSION_COLORS[0],
+            isChart: true,
+            yAxisLabels: [...DEFAULT_Y_AXIS_LABELS]
+          }
+        ],
         structure,
         cells: {},
-        chartData: {}
+        chapterEmotions: {}
       };
       settings.books.push(book);
       settings.activeBookId = book.id;
@@ -2046,6 +2404,7 @@ var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
         void this.plugin.saveSettings();
       });
     });
+    this.renderDimensionManagement(containerEl);
     containerEl.createEl("h3", { text: "\u5371\u9669\u64CD\u4F5C" });
     new import_obsidian4.Setting(containerEl).setName("\u91CD\u7F6E\u6240\u6709\u6570\u636E").setDesc("\u6E05\u7A7A\u6240\u6709\u62C6\u4E66\u9879\u76EE\u7684\u77E9\u9635\u914D\u7F6E\uFF08\u4E0D\u4F1A\u5220\u9664\u4ED3\u5E93\u4E2D\u7684\u7B14\u8BB0\u6587\u4EF6\uFF09").addButton((b) => {
       b.setButtonText("\u91CD\u7F6E").setWarning().onClick(() => {
@@ -2064,6 +2423,73 @@ var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
         }).open();
       });
     });
+  }
+  renderDimensionManagement(containerEl) {
+    var _a;
+    containerEl.createEl("h3", { text: "\u7EF4\u5EA6\u7BA1\u7406" });
+    const books = this.plugin.settings.books;
+    if (books.length === 0) {
+      containerEl.createEl("p", { text: "\u6682\u65E0\u62C6\u4E66\u9879\u76EE" }).addClass("chs-setting-note");
+      return;
+    }
+    let bookId = books[0].id;
+    new import_obsidian4.Setting(containerEl).setName("\u9009\u62E9\u62C6\u4E66").addDropdown((d) => {
+      for (const b of books) d.addOption(b.id, b.bookInfo.title || b.id);
+      d.setValue(bookId);
+      d.onChange((v) => {
+        bookId = v;
+        this.display();
+      });
+    });
+    const book = (_a = books.find((b) => b.id === bookId)) != null ? _a : books[0];
+    if (book.dimensions.length === 0) {
+      containerEl.createEl("p", { text: "\u8BE5\u9879\u76EE\u6682\u65E0\u7EF4\u5EA6" }).addClass("chs-setting-note");
+      return;
+    }
+    for (const dim of book.dimensions) {
+      this.renderDimensionRow(containerEl, book, dim);
+    }
+  }
+  renderDimensionRow(containerEl, book, dim) {
+    new import_obsidian4.Setting(containerEl).setName("\u7EF4\u5EA6\u6807\u7B7E").setDesc("\u4FEE\u6539\u540E\uFF0C\u8868\u5934\u4E0E\u5DF2\u6709\u7B14\u8BB0\u7684\u300C\u7EF4\u5EA6\u300D\u5C5E\u6027\u81EA\u52A8\u540C\u6B65").addText((t) => {
+      t.setValue(dim.name);
+      t.inputEl.addEventListener("blur", () => {
+        const name = sanitizeFileName(t.getValue());
+        if (name && name !== dim.name) {
+          void this.plugin.renameDimension(book.id, dim.id, name);
+        }
+      });
+      t.inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") t.inputEl.blur();
+      });
+    }).addColorPicker((cp) => {
+      cp.setValue(dim.color).onChange((c) => {
+        dim.color = c;
+        void this.plugin.saveSettings();
+        this.plugin.notifyViews();
+      });
+    });
+    new import_obsidian4.Setting(containerEl).setName(dim.name + " \xB7 \u60C5\u7EEA\u6298\u7EBF").setDesc("\u5F00\u542F\u540E\u8BE5\u7EF4\u5EA6\u62E5\u6709\u4E13\u5C5E\u6298\u7EBF\u7ED8\u5236").addToggle((t) => {
+      t.setValue(dim.isChart).onChange((v) => {
+        dim.isChart = v;
+        void this.plugin.saveSettings();
+        this.plugin.notifyViews();
+        this.display();
+      });
+    });
+    if (dim.isChart) {
+      new import_obsidian4.Setting(containerEl).setName("Y\u8F74 5 \u5C42\u7EA7\u540D\u79F0").setDesc("\u4ECE\u4F4E\u5230\u9AD8 5 \u5C42\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u7B2C 3 \u5C42\u4E3A\u57FA\u51C6\u7EBF\uFF09").addText((t) => {
+        t.setValue(dim.yAxisLabels.join(","));
+        t.inputEl.addEventListener("blur", () => {
+          dim.yAxisLabels = normalizeYAxisLabels(t.getValue().split(/[,，、\s]+/).filter(Boolean));
+          void this.plugin.saveSettings();
+          this.plugin.notifyViews();
+        });
+        t.inputEl.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") t.inputEl.blur();
+        });
+      });
+    }
   }
 };
 
@@ -2149,9 +2575,34 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
     const leaf = leaves[0];
     return leaf && leaf.view instanceof ChaiShuMatrixView ? leaf.view : null;
   }
+  /** Rename a dimension label and sync the `维度` property in its existing notes. */
+  async renameDimension(bookId, dimId, newName) {
+    const book = this.settings.books.find((b) => b.id === bookId);
+    if (!book) return;
+    const dim = book.dimensions.find((d) => d.id === dimId);
+    if (!dim) return;
+    const name = sanitizeFileName(newName) || dim.name;
+    if (name === dim.name) return;
+    dim.name = name;
+    for (const ch of collectChapters(book.structure)) {
+      const cell = book.cells[cellKey(ch.id, dimId)];
+      if (!(cell == null ? void 0 : cell.filePath)) continue;
+      const f = this.app.vault.getAbstractFileByPath(cell.filePath);
+      if (f instanceof import_obsidian5.TFile) {
+        try {
+          const body = stripFrontmatter(await this.app.vault.cachedRead(f));
+          const content = buildChapterContent(book, ch.id, dim, body);
+          await this.app.vault.modify(f, content);
+        } catch (e) {
+        }
+      }
+    }
+    await this.saveSettings();
+    this.notifyViews();
+  }
   // ---------------------------------------------------------- normalization
   normalizeBook(b) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
     const bookInfo = {
       title: (_b = (_a = b.bookInfo) == null ? void 0 : _a.title) != null ? _b : "\u672A\u547D\u540D\u62C6\u4E66",
       author: (_d = (_c = b.bookInfo) == null ? void 0 : _c.author) != null ? _d : "",
@@ -2166,11 +2617,28 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
         id: (_a2 = d.id) != null ? _a2 : uid("d"),
         name: (_b2 = d.name) != null ? _b2 : "\u7EF4\u5EA6",
         color: (_c2 = d.color) != null ? _c2 : DIMENSION_COLORS[0],
-        type: d.type === "chart" || d.name === "\u60C5\u7EEA" ? "chart" : void 0
+        isChart: d.isChart === true || d.type === "chart" || d.name === "\u60C5\u7EEA",
+        yAxisLabels: normalizeYAxisLabels(d.yAxisLabels)
       };
     }) : [];
     const storagePath = typeof b.storagePath === "string" ? b.storagePath : "";
-    const chartData = b.chartData && typeof b.chartData === "object" ? b.chartData : {};
+    let chapterEmotions;
+    if (b.chapterEmotions && typeof b.chapterEmotions === "object") {
+      chapterEmotions = b.chapterEmotions;
+    } else if (b.chartData && typeof b.chartData === "object") {
+      chapterEmotions = {};
+      for (const points of Object.values(b.chartData)) {
+        if (!Array.isArray(points)) continue;
+        for (const p of points) {
+          if (!(p == null ? void 0 : p.chapterId)) continue;
+          const value = typeof p.value === "number" ? p.value : 0;
+          const y = Math.max(1, Math.min(5, Math.round(value / 2.5) + 1));
+          ((_l = chapterEmotions[_k = p.chapterId]) != null ? _l : chapterEmotions[_k] = []).push({ x: 50, y });
+        }
+      }
+    } else {
+      chapterEmotions = {};
+    }
     let structure;
     let cells;
     if (Array.isArray(b.structure)) {
@@ -2195,7 +2663,7 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
         if (!nodeId) continue;
         const cc = c;
         cells[cellKey(nodeId, dimId)] = {
-          filePath: (_k = cc == null ? void 0 : cc.filePath) != null ? _k : "",
+          filePath: (_m = cc == null ? void 0 : cc.filePath) != null ? _m : "",
           hasContent: !!(cc == null ? void 0 : cc.hasContent)
         };
       }
@@ -2204,13 +2672,13 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
       cells = {};
     }
     return {
-      id: (_l = b.id) != null ? _l : uid("book"),
+      id: (_n = b.id) != null ? _n : uid("book"),
       bookInfo,
       storagePath,
       dimensions,
       structure,
       cells,
-      chartData
+      chapterEmotions
     };
   }
   normalizeNode(n) {

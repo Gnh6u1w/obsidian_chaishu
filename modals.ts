@@ -1,6 +1,7 @@
 import {
   App,
   ButtonComponent,
+  FuzzySuggestModal,
   Modal,
   Notice,
   normalizePath,
@@ -10,11 +11,13 @@ import {
   TFolder,
 } from "obsidian";
 import {
+  DEFAULT_Y_AXIS_LABELS,
   DIMENSION_COLOR_NAMES,
   DIMENSION_COLORS,
   Dimension,
+  ImportRequest,
 } from "./types";
-import { ensureFolder, sanitizeFileName } from "./store";
+import { ensureFolder, normalizeYAxisLabels, sanitizeFileName } from "./store";
 
 export class BookCreateModal extends Modal {
   private title = "";
@@ -79,7 +82,8 @@ export class BookCreateModal extends Modal {
 export class DimensionModal extends Modal {
   private name = "";
   private color = DIMENSION_COLORS[0];
-  private chart = false;
+  private isChart = false;
+  private yAxisLabels: string[] = [...DEFAULT_Y_AXIS_LABELS];
   private isEdit = false;
 
   constructor(
@@ -87,7 +91,7 @@ export class DimensionModal extends Modal {
     private opts: {
       title: string;
       initial?: Dimension;
-      onSave: (name: string, color: string, chart: boolean) => void;
+      onSave: (name: string, color: string, isChart: boolean, yAxisLabels: string[]) => void;
       onDelete?: () => void;
     }
   ) {
@@ -95,7 +99,8 @@ export class DimensionModal extends Modal {
     if (opts.initial) {
       this.name = opts.initial.name;
       this.color = opts.initial.color;
-      this.chart = opts.initial.type === "chart";
+      this.isChart = opts.initial.isChart;
+      this.yAxisLabels = normalizeYAxisLabels(opts.initial.yAxisLabels);
       this.isEdit = true;
     }
   }
@@ -146,8 +151,17 @@ export class DimensionModal extends Modal {
 
     new Setting(contentEl)
       .setName("开启情绪折线画板")
-      .setDesc("该维度将显示「情绪折线」绘制面板（type = chart）")
-      .addToggle((t) => t.setValue(this.chart).onChange((v) => (this.chart = v)));
+      .setDesc("开启后，该维度拥有专属的折线图绘制功能")
+      .addToggle((t) => t.setValue(this.isChart).onChange((v) => (this.isChart = v)));
+
+    new Setting(contentEl)
+      .setName("Y轴 5 层级名称")
+      .setDesc("从低到高 5 层，用逗号分隔（第 3 层为基准线）")
+      .addText((t) => {
+        t.setValue(this.yAxisLabels.join(",")).onChange((v) => {
+          this.yAxisLabels = normalizeYAxisLabels(v.split(/[,，、\s]+/).filter(Boolean));
+        });
+      });
 
     const footer = contentEl.createDiv("chs-modal-actions");
     new ButtonComponent(footer).setButtonText("取消").onClick(() => this.close());
@@ -173,7 +187,7 @@ export class DimensionModal extends Modal {
       return;
     }
     this.close();
-    this.opts.onSave(name, this.color || DIMENSION_COLORS[0], this.chart);
+    this.opts.onSave(name, this.color || DIMENSION_COLORS[0], this.isChart, this.yAxisLabels);
   }
 
   onClose(): void {
@@ -340,7 +354,6 @@ export class StoragePathModal extends Modal {
     new Setting(contentEl).setName("存放路径").setDesc("留空 = 库根目录").addText((t) => {
       t.setPlaceholder("例如：拆书项目")
         .setValue(this.opts.current)
-        .onChange((v) => (this.pathInput = t.inputEl))
         .inputEl.addClass("chs-input");
       this.pathInput = t.inputEl;
       t.inputEl.addEventListener("keydown", (e) => {
@@ -490,6 +503,200 @@ export class WallpaperModal extends Modal {
     }
     const footer = contentEl.createDiv("chs-modal-actions");
     new ButtonComponent(footer).setButtonText("返回").onClick(() => this.render());
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+/** Search and pick an existing vault markdown note. */
+export class NoteSuggestModal extends FuzzySuggestModal<TFile> {
+  constructor(app: App, private onChoose: (file: TFile) => void) {
+    super(app);
+  }
+
+  getItems(): TFile[] {
+    return this.app.vault.getMarkdownFiles();
+  }
+
+  getItemText(item: TFile): string {
+    return item.path;
+  }
+
+  onChooseItem(item: TFile): void {
+    this.onChoose(item);
+  }
+}
+
+/** Import an external file or an existing vault note into a target cell. */
+export class ImportModal extends Modal {
+  private sourceType: "external" | "vault" | null = null;
+  private sourceName = "";
+  private content = "";
+  private vaultPath = "";
+  private chapterId = "";
+  private dimensionId = "";
+  private move = true;
+  private statusEl!: HTMLElement;
+
+  constructor(
+    app: App,
+    private opts: {
+      chapters: { id: string; name: string }[];
+      dimensions: { id: string; name: string }[];
+      onImport: (req: ImportRequest) => Promise<void> | void;
+    }
+  ) {
+    super(app);
+    this.chapterId = opts.chapters[0]?.id ?? "";
+    this.dimensionId = opts.dimensions[0]?.id ?? "";
+  }
+
+  onOpen(): void {
+    this.render();
+  }
+
+  private render(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-modal");
+    contentEl.createEl("h2", { text: "导入笔记" });
+
+    const srcRow = contentEl.createDiv("chs-modal-actions");
+    const extBtn = srcRow.createEl("button", { cls: "chs-btn", text: "导入本地文件 (.md/.txt)" });
+    extBtn.addEventListener("click", () => this.pickFile());
+    const vaultBtn = srcRow.createEl("button", { cls: "chs-btn", text: "从库中选择笔记" });
+    vaultBtn.addEventListener("click", () => this.pickVaultNote());
+
+    this.statusEl = contentEl.createDiv("chs-import-status");
+    this.updateStatus();
+
+    new Setting(contentEl).setName("目标章节").addDropdown((d) => {
+      for (const c of this.opts.chapters) d.addOption(c.id, c.name);
+      d.setValue(this.chapterId);
+      d.onChange((v) => (this.chapterId = v));
+    });
+
+    new Setting(contentEl).setName("目标维度").addDropdown((d) => {
+      for (const dm of this.opts.dimensions) d.addOption(dm.id, dm.name);
+      d.setValue(this.dimensionId);
+      d.onChange((v) => (this.dimensionId = v));
+    });
+
+    if (this.sourceType === "vault") {
+      new Setting(contentEl)
+        .setName("移动到拆书文件夹")
+        .setDesc("若笔记不在拆书文件夹中，导入时将其移动过去")
+        .addToggle((t) => t.setValue(this.move).onChange((v) => (this.move = v)));
+    }
+
+    const footer = contentEl.createDiv("chs-modal-actions");
+    new ButtonComponent(footer).setButtonText("取消").onClick(() => this.close());
+    new ButtonComponent(footer).setButtonText("导入").setCta().onClick(() => this.submit());
+  }
+
+  private pickFile(): void {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".md,.txt,text/markdown,text/plain";
+    input.addEventListener("change", async () => {
+      const f = input.files?.[0];
+      if (!f) return;
+      this.sourceType = "external";
+      this.sourceName = f.name;
+      this.content = await f.text();
+      this.render();
+    });
+    input.click();
+  }
+
+  private pickVaultNote(): void {
+    new NoteSuggestModal(this.app, (file) => {
+      this.sourceType = "vault";
+      this.sourceName = file.name;
+      this.vaultPath = file.path;
+      this.content = "";
+      this.render();
+    }).open();
+  }
+
+  private updateStatus(): void {
+    if (!this.statusEl) return;
+    this.statusEl.empty();
+    if (!this.sourceType) {
+      this.statusEl.setText("尚未选择来源笔记");
+    } else if (this.sourceType === "external") {
+      this.statusEl.setText("已选文件：" + this.sourceName);
+    } else {
+      this.statusEl.setText("已选库内笔记：" + this.vaultPath);
+    }
+  }
+
+  private submit(): void {
+    if (!this.sourceType) {
+      new Notice("请先选择来源笔记");
+      return;
+    }
+    if (!this.chapterId) {
+      new Notice("请选择目标章节");
+      return;
+    }
+    if (!this.dimensionId) {
+      new Notice("请选择目标维度");
+      return;
+    }
+    this.close();
+    this.opts.onImport({
+      sourceType: this.sourceType,
+      sourceName: this.sourceName,
+      content: this.sourceType === "external" ? this.content : undefined,
+      vaultPath: this.sourceType === "vault" ? this.vaultPath : undefined,
+      chapterId: this.chapterId,
+      dimensionId: this.dimensionId,
+      move: this.move,
+    });
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+/** Tree selector for moving a node (used instead of drag on mobile). */
+export class MoveNodeModal extends Modal {
+  constructor(
+    app: App,
+    private opts: {
+      targets: { id: string; name: string; type: "volume" | "unit" }[];
+      onSelect: (targetId: string | null) => void;
+    }
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-modal");
+    contentEl.createEl("h2", { text: "移动到…" });
+
+    const list = contentEl.createDiv("chs-folder-list");
+    const root = list.createEl("button", { cls: "chs-folder-item" });
+    root.setText("📁 顶层（根）");
+    root.addEventListener("click", () => {
+      this.close();
+      this.opts.onSelect(null);
+    });
+
+    for (const t of this.opts.targets) {
+      const btn = list.createEl("button", { cls: "chs-folder-item" });
+      btn.setText((t.type === "volume" ? "📚 " : "📦 ") + t.name);
+      btn.addEventListener("click", () => {
+        this.close();
+        this.opts.onSelect(t.id);
+      });
+    }
   }
 
   onClose(): void {

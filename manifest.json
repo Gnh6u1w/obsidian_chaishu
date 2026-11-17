@@ -1,9 +1,9 @@
 {
   "id": "chaishu-matrix-pro",
   "name": "ChaiShu Matrix Pro",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "minAppVersion": "1.5.0",
-  "description": "书名矩阵专业版：卷/单元/章节树形大纲 × 分析维度矩阵，情绪折线画板、壁纸背景、单元格与 Obsidian 笔记双向联动自动归档。",
+  "description": "书名矩阵专业版：卷/单元/章节树形大纲 × 分析维度矩阵，三级情绪折线画板、笔记导入、壁纸背景，单元格与 Obsidian 笔记双向联动自动归档。",
   "author": "Gnh6u1w",
   "authorUrl": "https://github.com/Gnh6u1w",
   "isDesktopOnly": false

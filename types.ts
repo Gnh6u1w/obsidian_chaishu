@@ -6,8 +6,10 @@ export interface Dimension {
   id: string;
   name: string;
   color: string;
-  /** When "chart", this dimension exposes the emotion-chart drawing panel. */
-  type?: "chart";
+  /** When true, this dimension exposes the emotion-chart drawing. */
+  isChart: boolean;
+  /** 5 labels for the emotion Y-axis (from lowest to highest). */
+  yAxisLabels: string[];
 }
 
 export interface NodeData {
@@ -38,9 +40,11 @@ export interface CellData {
   hasContent: boolean;
 }
 
-export interface ChartPoint {
-  chapterId: string;
-  value: number;
+export interface EmotionPoint {
+  /** Plot progress 0..100. */
+  x: number;
+  /** Emotion level 1..5 (1 = lowest, 5 = highest). */
+  y: number;
 }
 
 export interface BookData {
@@ -51,7 +55,21 @@ export interface BookData {
   dimensions: Dimension[];
   structure: NodeData[];
   cells: Record<string, CellData>;
-  chartData: Record<string, ChartPoint[]>;
+  /** Emotion points per chapter id (the emotion chart is per-book). */
+  chapterEmotions: Record<string, EmotionPoint[]>;
+}
+
+export interface ImportRequest {
+  sourceType: "external" | "vault";
+  sourceName: string;
+  /** File text content (external import only). */
+  content?: string;
+  /** Vault-relative path (vault import only). */
+  vaultPath?: string;
+  chapterId: string;
+  dimensionId: string;
+  /** Move the vault note into the book folder (vault import only). */
+  move: boolean;
 }
 
 export interface ChaiShuSettings {
@@ -69,6 +87,16 @@ export const DEFAULT_SETTINGS: ChaiShuSettings = {
   activeBookId: "",
   books: [],
 };
+
+export const EMOTION_LEVELS = 5;
+
+export const DEFAULT_Y_AXIS_LABELS: string[] = [
+  "极差",
+  "低落",
+  "平稳",
+  "高昂",
+  "极好",
+];
 
 export const DIMENSION_COLORS: string[] = [
   "#3b82f6", // blue
@@ -91,5 +119,3 @@ export const DIMENSION_COLOR_NAMES: string[] = [
   "青",
   "黄",
 ];
-
-export const CHART_VALUE_MAX = 10;

@@ -1,5 +1,6 @@
 import { normalizePath, TFile, Vault } from "obsidian";
 import type { BookData, Dimension, NodeData, NodeType } from "./types";
+import { DEFAULT_Y_AXIS_LABELS, EMOTION_LEVELS } from "./types";
 
 /** Generate a collision-resistant id without Node/Electron APIs. */
 export function uid(prefix: string): string {
@@ -305,6 +306,17 @@ export async function createChapterNote(
     return existing;
   }
   return await vault.create(filePath, content);
+}
+
+/** Normalize a raw value into exactly 5 emotion Y-axis labels. */
+export function normalizeYAxisLabels(labels: unknown): string[] {
+  const out: string[] = [];
+  const src = Array.isArray(labels) ? labels : [];
+  for (let i = 0; i < EMOTION_LEVELS; i++) {
+    const v = src[i];
+    out.push(typeof v === "string" && v.trim() ? v.trim() : DEFAULT_Y_AXIS_LABELS[i]);
+  }
+  return out;
 }
 
 /** Create (or overwrite) a volume/unit summary note and return the TFile. */

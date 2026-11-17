@@ -8,11 +8,21 @@ import {
   DEFAULT_SETTINGS,
   DIMENSION_COLORS,
   Dimension,
+  EmotionPoint,
   NodeData,
   NodeType,
   VIEW_TYPE_CHAISHU_MATRIX,
 } from "./types";
-import { cellKey, createNode, sanitizeFileName, uid } from "./store";
+import {
+  buildChapterContent,
+  cellKey,
+  collectChapters,
+  createNode,
+  normalizeYAxisLabels,
+  sanitizeFileName,
+  stripFrontmatter,
+  uid,
+} from "./store";
 
 export default class ChaiShuMatrixPlugin extends Plugin {
   settings!: ChaiShuSettings;
@@ -105,6 +115,34 @@ export default class ChaiShuMatrixPlugin extends Plugin {
     return leaf && leaf.view instanceof ChaiShuMatrixView ? leaf.view : null;
   }
 
+  /** Rename a dimension label and sync the `维度` property in its existing notes. */
+  async renameDimension(bookId: string, dimId: string, newName: string): Promise<void> {
+    const book = this.settings.books.find((b) => b.id === bookId);
+    if (!book) return;
+    const dim = book.dimensions.find((d) => d.id === dimId);
+    if (!dim) return;
+    const name = sanitizeFileName(newName) || dim.name;
+    if (name === dim.name) return;
+    dim.name = name;
+
+    for (const ch of collectChapters(book.structure)) {
+      const cell = book.cells[cellKey(ch.id, dimId)];
+      if (!cell?.filePath) continue;
+      const f = this.app.vault.getAbstractFileByPath(cell.filePath);
+      if (f instanceof TFile) {
+        try {
+          const body = stripFrontmatter(await this.app.vault.cachedRead(f));
+          const content = buildChapterContent(book, ch.id, dim, body);
+          await this.app.vault.modify(f, content);
+        } catch (e) {
+          /* ignore individual note failures */
+        }
+      }
+    }
+    await this.saveSettings();
+    this.notifyViews();
+  }
+
   // ---------------------------------------------------------- normalization
 
   private normalizeBook(b: any): BookData {
@@ -122,13 +160,31 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           id: d.id ?? uid("d"),
           name: d.name ?? "维度",
           color: d.color ?? DIMENSION_COLORS[0],
-          type: d.type === "chart" || d.name === "情绪" ? ("chart" as const) : undefined,
+          isChart: d.isChart === true || d.type === "chart" || d.name === "情绪",
+          yAxisLabels: normalizeYAxisLabels(d.yAxisLabels),
         }))
       : [];
 
     const storagePath = typeof b.storagePath === "string" ? b.storagePath : "";
-    const chartData =
-      b.chartData && typeof b.chartData === "object" ? b.chartData : {};
+
+    let chapterEmotions: Record<string, EmotionPoint[]>;
+    if (b.chapterEmotions && typeof b.chapterEmotions === "object") {
+      chapterEmotions = b.chapterEmotions;
+    } else if (b.chartData && typeof b.chartData === "object") {
+      // Migrate from V1.1 chartData (per-dimension, value 0..10) to per-chapter points.
+      chapterEmotions = {};
+      for (const points of Object.values(b.chartData)) {
+        if (!Array.isArray(points)) continue;
+        for (const p of points as any[]) {
+          if (!p?.chapterId) continue;
+          const value = typeof p.value === "number" ? p.value : 0;
+          const y = Math.max(1, Math.min(5, Math.round(value / 2.5) + 1));
+          (chapterEmotions[p.chapterId] ??= []).push({ x: 50, y });
+        }
+      }
+    } else {
+      chapterEmotions = {};
+    }
 
     let structure: NodeData[];
     let cells: Record<string, CellData>;
@@ -172,7 +228,7 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       dimensions,
       structure,
       cells,
-      chartData,
+      chapterEmotions,
     };
   }
 
