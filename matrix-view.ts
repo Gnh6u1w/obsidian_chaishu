@@ -13,26 +13,26 @@ import {
   DEFAULT_Y_AXIS_LABELS,
   DIMENSION_COLORS,
   Dimension,
-  EMOTION_LEVELS,
-  EmotionPoint,
   ImportRequest,
   NodeData,
   VIEW_TYPE_CHAISHU_MATRIX,
 } from "./types";
 import {
   buildChapterPath,
+  buildEmotionPath,
   buildSummaryPath,
   cellKey,
   collectChapters,
   collectUnits,
   collectVolumes,
   createChapterNote,
+  createEmotionNote,
   createNode,
   createSummaryNote,
   findNode,
   findParentArray,
   isSelfOrDescendant,
-  normalizeYAxisLabels,
+  parseEmotionData,
   removeNode,
   sanitizeFileName,
   stripFrontmatter,
@@ -53,33 +53,60 @@ import {
 const MAX_PREVIEW = 300;
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-// Emotion chart layout (pixels in the SVG coordinate system).
-const CHART_PLOT_W = 520;
-const CHART_PAD_LEFT = 46;
-const CHART_PAD_RIGHT = 16;
-const CHART_PAD_TOP = 14;
-const CHART_PAD_BOTTOM = 30;
-const CHART_HEIGHT = 210;
-
 function makeSvg(tag: string, attrs: Record<string, string>): SVGElement {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
 }
 
-/** Aggregate per-chapter emotion points into one macro 0..100 line. */
-function aggregateEmotions(book: BookData, chapters: NodeData[]): EmotionPoint[] {
-  const n = chapters.length;
-  const out: EmotionPoint[] = [];
-  chapters.forEach((ch, i) => {
-    const pts = book.chapterEmotions[ch.id] ?? [];
-    const start = n > 0 ? (i / n) * 100 : 0;
-    const w = n > 0 ? 100 / n : 100;
-    for (const p of pts) {
-      out.push({ x: start + (p.x / 100) * w, y: p.y });
-    }
+/** Render a tiny sparkline (or an activity icon when there is no data). */
+function renderSparkline(
+  el: HTMLElement,
+  data: number[],
+  color: string,
+  width: number,
+  height: number
+): void {
+  el.empty();
+  if (!data || data.length < 2) {
+    const span = el.createSpan("chs-spark-empty");
+    setIcon(span, "activity");
+    return;
+  }
+  const min = 1;
+  const max = 5;
+  const pad = 1.5;
+  const svg = makeSvg("svg", {
+    width: String(width),
+    height: String(height),
+    viewBox: "0 0 " + width + " " + height,
   });
-  return out.sort((a, b) => a.x - b.x);
+  svg.setAttribute("class", "chs-sparkline");
+  const pts: string[] = [];
+  const n = data.length;
+  for (let i = 0; i < n; i++) {
+    const x = pad + (i / (n - 1)) * (width - 2 * pad);
+    const y = pad + (1 - (data[i] - min) / (max - min)) * (height - 2 * pad);
+    pts.push(x.toFixed(1) + "," + y.toFixed(1));
+  }
+  const poly = makeSvg("polyline", {
+    points: pts.join(" "),
+    fill: "none",
+    stroke: color,
+    "stroke-width": "1.5",
+    "stroke-linejoin": "round",
+    "stroke-linecap": "round",
+  });
+  svg.appendChild(poly);
+  el.appendChild(svg);
+}
+
+/** Emotion values for a node: chapter uses its own; volume/unit aggregate descendants. */
+function nodeEmotionData(node: NodeData): number[] {
+  if (node.type === "chapter") return node.emotionData ?? [];
+  const out: number[] = [];
+  for (const ch of collectChapters([node])) out.push(...(ch.emotionData ?? []));
+  return out;
 }
 
 export class ChaiShuMatrixView extends ItemView {
@@ -88,26 +115,12 @@ export class ChaiShuMatrixView extends ItemView {
 
   private observer: IntersectionObserver | null = null;
   private saveTimer: number | null = null;
-  private chartSaveTimer: number | null = null;
 
   private wrapEl!: HTMLElement;
   private matrixScrollEl!: HTMLElement;
   private matrixEl!: HTMLTableElement;
   private statsEl!: HTMLElement;
   private selectEl!: HTMLSelectElement;
-
-  // Chart state
-  private chartPanelEl: HTMLElement | null = null;
-  private chartBodyEl: HTMLElement | null = null;
-  private chartSvgEl: SVGSVGElement | null = null;
-  private chartPolyEl: SVGElement | null = null;
-  private chartPointsEl: SVGElement | null = null;
-  private chartCollapsed = false;
-  private chartEraser = false;
-  private chartPointerDown = false;
-  private activeChartDimId = "";
-  private chartLevel: "volume" | "unit" | "chapter" = "chapter";
-  private activeChartNodeId = "";
 
   // Drag state
   private dragNodeId: string | null = null;
@@ -138,6 +151,10 @@ export class ChaiShuMatrixView extends ItemView {
     return this.settings.books.find((b) => b.id === this.activeBookId) ?? null;
   }
 
+  private getChartDim(): Dimension | undefined {
+    return this.book?.dimensions.find((d) => d.isChart);
+  }
+
   async onOpen(): Promise<void> {
     const books = this.settings.books;
     if (this.settings.activeBookId && books.some((b) => b.id === this.settings.activeBookId)) {
@@ -154,9 +171,7 @@ export class ChaiShuMatrixView extends ItemView {
     this.observer?.disconnect();
     this.observer = null;
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
-    if (this.chartSaveTimer !== null) window.clearTimeout(this.chartSaveTimer);
     this.saveTimer = null;
-    this.chartSaveTimer = null;
     this.plugin.views.delete(this);
     this.contentEl.empty();
   }
@@ -178,7 +193,6 @@ export class ChaiShuMatrixView extends ItemView {
       : null;
     this.observer?.disconnect();
     this.observer = null;
-    this.chartPanelEl = null;
 
     const { contentEl } = this;
     contentEl.empty();
@@ -197,7 +211,6 @@ export class ChaiShuMatrixView extends ItemView {
     }
     this.buildBookInfo();
     this.buildToolbar();
-    this.buildChartPanel();
     this.buildMatrix();
 
     if (prevScroll && this.matrixScrollEl) {
@@ -367,347 +380,6 @@ export class ChaiShuMatrixView extends ItemView {
     return Math.min(500, n);
   }
 
-  // ================================================================ chart
-
-  private chartX(x: number): number {
-    return CHART_PAD_LEFT + (x / 100) * CHART_PLOT_W;
-  }
-
-  private chartY(level: number): number {
-    const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-    return CHART_PAD_TOP + ((EMOTION_LEVELS - level) / (EMOTION_LEVELS - 1)) * plotH;
-  }
-
-  private levelNodes(): NodeData[] {
-    const book = this.book;
-    if (!book) return [];
-    if (this.chartLevel === "chapter") return collectChapters(book.structure);
-    if (this.chartLevel === "unit") return collectUnits(book.structure);
-    return collectVolumes(book.structure);
-  }
-
-  private levelLabel(): string {
-    return this.chartLevel === "chapter" ? "章节" : this.chartLevel === "unit" ? "单元" : "卷";
-  }
-
-  private buildChartPanel(): void {
-    this.chartPanelEl?.remove();
-    this.chartPanelEl = null;
-    this.chartBodyEl = null;
-    this.chartSvgEl = null;
-    this.chartPolyEl = null;
-    this.chartPointsEl = null;
-
-    const book = this.book as BookData;
-    const chartDims = book.dimensions.filter((d) => d.isChart);
-    if (chartDims.length === 0) return;
-
-    if (!chartDims.some((d) => d.id === this.activeChartDimId)) {
-      this.activeChartDimId = chartDims[0].id;
-    }
-    const levelNodes = this.levelNodes();
-    if (!levelNodes.some((n) => n.id === this.activeChartNodeId)) {
-      this.activeChartNodeId = levelNodes[0]?.id ?? "";
-    }
-
-    const panel = this.wrapEl.createDiv("chs-chart-panel");
-    this.chartPanelEl = panel;
-    const head = panel.createDiv("chs-chart-head");
-
-    const toggle = head.createSpan("chs-toggle");
-    toggle.setText(this.chartCollapsed ? "▶" : "▼");
-    toggle.addEventListener("click", () => {
-      this.chartCollapsed = !this.chartCollapsed;
-      this.renderChart();
-    });
-
-    head.createSpan("chs-chart-title").setText("📈 情绪折线");
-
-    if (chartDims.length > 1) {
-      const sel = head.createEl("select");
-      sel.addClass("chs-select", "chs-chart-dim-select");
-      for (const d of chartDims) {
-        const o = sel.createEl("option");
-        o.value = d.id;
-        o.textContent = d.name;
-      }
-      sel.value = this.activeChartDimId;
-      sel.addEventListener("change", () => {
-        this.activeChartDimId = sel.value;
-        this.renderChart();
-      });
-    }
-
-    const levelSel = head.createEl("select");
-    levelSel.addClass("chs-select", "chs-chart-level-select");
-    levelSel.createEl("option", { value: "chapter", text: "章节" });
-    levelSel.createEl("option", { value: "unit", text: "单元" });
-    levelSel.createEl("option", { value: "volume", text: "卷" });
-    levelSel.value = this.chartLevel;
-    levelSel.addEventListener("change", () => {
-      this.chartLevel = levelSel.value as "volume" | "unit" | "chapter";
-      const ln = this.levelNodes();
-      this.activeChartNodeId = ln[0]?.id ?? "";
-      this.buildChartPanel();
-    });
-
-    const nodeSel = head.createEl("select");
-    nodeSel.addClass("chs-select", "chs-chart-node-select");
-    for (const n of levelNodes) {
-      const o = nodeSel.createEl("option");
-      o.value = n.id;
-      o.textContent = n.name;
-    }
-    nodeSel.value = this.activeChartNodeId;
-    nodeSel.addEventListener("change", () => {
-      this.activeChartNodeId = nodeSel.value;
-      this.renderChart();
-    });
-
-    if (this.chartLevel === "chapter") {
-      const eraser = head.createEl("button", {
-        cls: "chs-btn chs-btn-sm",
-        text: "🧽 橡皮擦",
-      });
-      eraser.addEventListener("click", () => {
-        this.chartEraser = !this.chartEraser;
-        eraser.toggleClass("chs-btn-primary", this.chartEraser);
-      });
-
-      const clear = head.createEl("button", {
-        cls: "chs-btn chs-btn-sm chs-btn-ghost",
-        text: "清除",
-      });
-      clear.addEventListener("click", () => {
-        const b = this.book;
-        const n = b ? findNode(b.structure, this.activeChartNodeId) : null;
-        if (b && n) {
-          b.chapterEmotions[n.id] = [];
-          void this.plugin.saveSettings();
-          this.renderChart();
-        }
-      });
-    } else {
-      head.createSpan("chs-chart-readonly").setText("（只读汇总）");
-    }
-
-    this.chartBodyEl = panel.createDiv("chs-chart-body");
-    this.renderChart();
-  }
-
-  private renderChart(): void {
-    const book = this.book;
-    if (this.chartBodyEl) this.chartBodyEl.toggleClass("is-hidden", this.chartCollapsed);
-    if (!this.chartBodyEl || this.chartCollapsed) return;
-
-    this.chartBodyEl.empty();
-    this.chartSvgEl = null;
-    this.chartPolyEl = null;
-    this.chartPointsEl = null;
-    if (!book) return;
-
-    const dim = book.dimensions.find((d) => d.id === this.activeChartDimId);
-    if (!dim || !dim.isChart) return;
-
-    let node = this.activeChartNodeId
-      ? findNode(book.structure, this.activeChartNodeId)
-      : null;
-    if (!node) {
-      const ln = this.levelNodes();
-      node = ln[0] ?? null;
-      this.activeChartNodeId = node?.id ?? "";
-    }
-    if (!node) {
-      this.chartBodyEl.createDiv("chs-chart-empty").setText("暂无" + this.levelLabel() + "，先创建对应层级节点");
-      return;
-    }
-
-    const editable = this.chartLevel === "chapter" && node.type === "chapter";
-    const labels = normalizeYAxisLabels(dim.yAxisLabels);
-    const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-    const totalW = CHART_PAD_LEFT + CHART_PLOT_W + CHART_PAD_RIGHT;
-
-    const svg = makeSvg("svg", {
-      width: String(totalW),
-      height: String(CHART_HEIGHT),
-    });
-    svg.setAttribute("class", "chs-chart-svg");
-    svg.style.touchAction = editable ? "none" : "auto";
-
-    // horizontal gridlines for the 5 levels + labels
-    for (let level = 1; level <= EMOTION_LEVELS; level++) {
-      const y = this.chartY(level);
-      const isBaseline = level === 3;
-      const line = makeSvg("line", {
-        x1: String(CHART_PAD_LEFT),
-        x2: String(CHART_PAD_LEFT + CHART_PLOT_W),
-        y1: String(y),
-        y2: String(y),
-      });
-      line.style.stroke = "var(--background-modifier-border)";
-      line.setAttribute("stroke-width", isBaseline ? "1.5" : "1");
-      if (isBaseline) line.setAttribute("stroke-dasharray", "4 3");
-      svg.appendChild(line);
-
-      const lbl = makeSvg("text", {
-        x: String(CHART_PAD_LEFT - 8),
-        y: String(y + 4),
-        "text-anchor": "end",
-      });
-      lbl.textContent = labels[level - 1] ?? String(level);
-      lbl.style.fill = isBaseline ? "var(--text-normal)" : "var(--text-muted)";
-      lbl.setAttribute("font-size", "11");
-      if (isBaseline) lbl.setAttribute("font-weight", "600");
-      svg.appendChild(lbl);
-    }
-
-    // x-axis line
-    const xAxis = makeSvg("line", {
-      x1: String(CHART_PAD_LEFT),
-      x2: String(CHART_PAD_LEFT + CHART_PLOT_W),
-      y1: String(CHART_PAD_TOP + plotH),
-      y2: String(CHART_PAD_TOP + plotH),
-    });
-    xAxis.style.stroke = "var(--background-modifier-border)";
-    xAxis.setAttribute("stroke-width", "1");
-    svg.appendChild(xAxis);
-
-    const poly = makeSvg("polyline", {
-      points: "",
-      fill: "none",
-      "stroke-width": editable ? "2.5" : "3",
-      "stroke-linejoin": "round",
-      "stroke-linecap": "round",
-    });
-    poly.setAttribute("stroke", dim.color);
-    if (!editable) poly.setAttribute("opacity", "0.7");
-    svg.appendChild(poly);
-    this.chartPolyEl = poly;
-
-    const pointsG = makeSvg("g", {});
-    svg.appendChild(pointsG);
-    this.chartPointsEl = pointsG;
-
-    if (editable) {
-      svg.style.cursor = "crosshair";
-      svg.addEventListener("pointerdown", (e) => {
-        e.preventDefault();
-        this.chartPointerDown = true;
-        this.handleChartPointer(e as PointerEvent);
-      });
-      svg.addEventListener("pointermove", (e) => {
-        if (this.chartPointerDown) this.handleChartPointer(e as PointerEvent);
-      });
-      const stop = () => {
-        this.chartPointerDown = false;
-      };
-      svg.addEventListener("pointerup", stop);
-      svg.addEventListener("pointerleave", stop);
-    } else {
-      svg.style.pointerEvents = "none";
-    }
-
-    this.chartBodyEl.appendChild(svg);
-    this.chartSvgEl = svg as SVGSVGElement;
-    this.updateChartLine();
-  }
-
-  private updateChartLine(): void {
-    const book = this.book;
-    const dim = book?.dimensions.find((d) => d.id === this.activeChartDimId);
-    if (!book || !dim || !dim.isChart || !this.chartPolyEl || !this.chartPointsEl) return;
-
-    const node = this.activeChartNodeId
-      ? findNode(book.structure, this.activeChartNodeId)
-      : null;
-    if (!node) return;
-
-    let points: EmotionPoint[];
-    if (this.chartLevel === "chapter" && node.type === "chapter") {
-      points = (book.chapterEmotions[node.id] ?? []).slice().sort((a, b) => a.x - b.x);
-    } else {
-      points = aggregateEmotions(book, node.type === "chapter" ? [node] : collectChapters([node]));
-    }
-
-    const linePts = points.map((p) => this.chartX(p.x) + "," + this.chartY(p.y));
-    this.chartPolyEl.setAttribute("points", linePts.join(" "));
-    this.chartPolyEl.setAttribute("stroke", dim.color);
-
-    while (this.chartPointsEl.firstChild) {
-      this.chartPointsEl.removeChild(this.chartPointsEl.firstChild);
-    }
-    for (const p of points) {
-      const c = makeSvg("circle", {
-        cx: String(this.chartX(p.x)),
-        cy: String(this.chartY(p.y)),
-        r: "4",
-      });
-      c.setAttribute("fill", dim.color);
-      this.chartPointsEl.appendChild(c);
-    }
-  }
-
-  private handleChartPointer(e: PointerEvent): void {
-    const book = this.book;
-    if (!book) return;
-    if (this.chartLevel !== "chapter") return;
-    const node = findNode(book.structure, this.activeChartNodeId);
-    if (!node || node.type !== "chapter") return;
-
-    const svg = e.currentTarget as SVGSVGElement;
-    const rect = svg.getBoundingClientRect();
-    const px = e.clientX - rect.left;
-    const py = e.clientY - rect.top;
-    const plotH = CHART_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
-
-    const arr = book.chapterEmotions[node.id] ?? (book.chapterEmotions[node.id] = []);
-
-    if (this.chartEraser) {
-      const idx = arr.findIndex(
-        (p) => Math.abs(this.chartX(p.x) - px) < 14 && Math.abs(this.chartY(p.y) - py) < 14
-      );
-      if (idx !== -1) arr.splice(idx, 1);
-    } else {
-      const x = Math.max(0, Math.min(100, ((px - CHART_PAD_LEFT) / CHART_PLOT_W) * 100));
-      const level = Math.max(
-        1,
-        Math.min(
-          EMOTION_LEVELS,
-          Math.round(EMOTION_LEVELS - ((py - CHART_PAD_TOP) / plotH) * (EMOTION_LEVELS - 1))
-        )
-      );
-      const rx = Math.round(x);
-      const existing = arr.findIndex((p) => Math.abs(p.x - rx) <= 3);
-      if (existing !== -1) arr[existing] = { x: rx, y: level };
-      else arr.push({ x: rx, y: level });
-    }
-    this.updateChartLine();
-    this.debounceChartSave();
-  }
-
-  private debounceChartSave(): void {
-    if (this.chartSaveTimer !== null) window.clearTimeout(this.chartSaveTimer);
-    this.chartSaveTimer = window.setTimeout(() => {
-      this.chartSaveTimer = null;
-      void this.plugin.saveSettings();
-    }, 300);
-  }
-
-  private openChartForNode(nodeId: string): void {
-    const book = this.book;
-    if (!book) return;
-    const node = findNode(book.structure, nodeId);
-    if (!node) return;
-    if (!book.dimensions.some((d) => d.isChart)) {
-      new Notice("请先在维度设置中开启「情绪折线」");
-      return;
-    }
-    this.chartLevel = node.type as "volume" | "unit" | "chapter";
-    this.activeChartNodeId = nodeId;
-    this.chartCollapsed = false;
-    this.render();
-  }
-
   // ================================================================ matrix
 
   private buildMatrix(): void {
@@ -733,7 +405,6 @@ export class ChaiShuMatrixView extends ItemView {
     this.setupObserver();
     this.renderMatrixRows();
     this.updateStats();
-    this.renderChart();
   }
 
   private setupObserver(): void {
@@ -804,13 +475,19 @@ export class ChaiShuMatrixView extends ItemView {
 
     if (node.type === "chapter") {
       for (const dim of book.dimensions) {
-        const key = cellKey(node.id, dim.id);
         const td = tr.createEl("td", { cls: "chs-cell" });
-        td.dataset.cellKey = key;
-        td.dataset.chapterId = node.id;
-        td.dataset.dimId = dim.id;
         td.style.setProperty("--chs-color", dim.color);
-        this.renderCell(td, key);
+        if (dim.isChart) {
+          td.dataset.emotionCell = node.id;
+          td.dataset.dimId = dim.id;
+          this.renderEmotionCell(td, node, dim);
+        } else {
+          const key = cellKey(node.id, dim.id);
+          td.dataset.cellKey = key;
+          td.dataset.chapterId = node.id;
+          td.dataset.dimId = dim.id;
+          this.renderCell(td, key);
+        }
       }
       tr.createEl("td", { cls: "chs-cell-filler" });
     } else {
@@ -856,10 +533,11 @@ export class ChaiShuMatrixView extends ItemView {
       sbtn.dataset.summaryId = node.id;
     }
 
+    const chartDim = this.getChartDim();
     const chartBtn = td.createEl("button", { cls: "chs-icon-btn chs-node-chart-btn" });
     chartBtn.dataset.chartNodeId = node.id;
     chartBtn.setAttribute("aria-label", "情绪折线");
-    setIcon(chartBtn, "activity");
+    renderSparkline(chartBtn, nodeEmotionData(node), chartDim?.color ?? "#3b82f6", 28, 16);
 
     const more = td.createEl("button", { cls: "chs-icon-btn chs-node-menu-btn" });
     more.dataset.nodeMenuId = node.id;
@@ -880,6 +558,22 @@ export class ChaiShuMatrixView extends ItemView {
       td.addClass("is-filled");
       td.createDiv("chs-cell-body").setText("…");
       this.observer?.observe(td);
+    } else {
+      td.addClass("is-empty");
+      const plus = td.createDiv("chs-cell-plus");
+      setIcon(plus, "plus");
+    }
+  }
+
+  private renderEmotionCell(td: HTMLElement, node: NodeData, dim: Dimension): void {
+    td.empty();
+    td.removeClass("is-filled", "is-empty");
+    const data = node.emotionData ?? [];
+    if (node.emotionFile && data.length >= 2) {
+      td.addClass("is-filled");
+      const body = td.createDiv("chs-cell-body");
+      renderSparkline(body, data, dim.color, 140, 44);
+      body.createDiv("chs-cell-emotion-hint").setText("点击编辑");
     } else {
       td.addClass("is-empty");
       const plus = td.createDiv("chs-cell-plus");
@@ -1016,6 +710,12 @@ export class ChaiShuMatrixView extends ItemView {
       return;
     }
 
+    const emotionCell = t.closest("[data-emotion-cell]") as HTMLElement | null;
+    if (emotionCell) {
+      void this.openEmotionNote(emotionCell.dataset.emotionCell as string);
+      return;
+    }
+
     const summaryEl = t.closest("[data-summary-id]") as HTMLElement | null;
     if (summaryEl) {
       void this.openSummaryModal(summaryEl.dataset.summaryId as string);
@@ -1030,7 +730,9 @@ export class ChaiShuMatrixView extends ItemView {
 
     const chartBtn = t.closest("[data-chart-node-id]") as HTMLElement | null;
     if (chartBtn) {
-      this.openChartForNode(chartBtn.dataset.chartNodeId as string);
+      const id = chartBtn.dataset.chartNodeId as string;
+      const n = this.book ? findNode(this.book.structure, id) : null;
+      if (n?.type === "chapter") void this.openEmotionNote(id);
       return;
     }
 
@@ -1118,6 +820,37 @@ export class ChaiShuMatrixView extends ItemView {
     } else {
       void this.openCellEditor(key, chapterId, dimId);
     }
+  }
+
+  private async openEmotionNote(chapterId: string): Promise<void> {
+    const book = this.book;
+    if (!book) return;
+    const chapter = findNode(book.structure, chapterId);
+    if (!chapter || chapter.type !== "chapter") return;
+    const dim = this.getChartDim();
+    if (!dim) {
+      new Notice("请先添加开启「情绪折线」的维度");
+      return;
+    }
+
+    const path = buildEmotionPath(book, chapterId, dim.name);
+    let file: TFile;
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof TFile) {
+      file = existing;
+      try {
+        chapter.emotionData = parseEmotionData(await this.app.vault.cachedRead(file));
+      } catch (e) {
+        /* ignore */
+      }
+    } else {
+      file = await createEmotionNote(this.app.vault, book, chapterId, dim.name, [3, 3, 3, 3, 3]);
+      chapter.emotionFile = file.path;
+      chapter.emotionData = [3, 3, 3, 3, 3];
+      await this.plugin.saveSettings();
+      this.renderMatrix();
+    }
+    await this.app.workspace.getLeaf(false).openFile(file);
   }
 
   private async openCellEditor(key: string, chapterId: string, dimId: string): Promise<void> {
@@ -1337,6 +1070,11 @@ export class ChaiShuMatrixView extends ItemView {
           .onClick(() => void this.openSummaryModal(nodeId))
       );
     }
+    if (node.type === "chapter") {
+      menu.addItem((i) =>
+        i.setTitle("编辑情绪折线").setIcon("activity").onClick(() => void this.openEmotionNote(nodeId))
+      );
+    }
     menu.addItem((i) =>
       i.setTitle("移动到…").setIcon("folder-input").onClick(() => this.openMoveNodeModal(nodeId))
     );
@@ -1479,7 +1217,6 @@ export class ChaiShuMatrixView extends ItemView {
       }
       return { arr: target.children, index: target.children.length };
     }
-    // chapter target
     const arr = findParentArray(book.structure, target.id);
     if (!arr) return null;
     return { arr, index: arr.indexOf(target) + 1 };
@@ -1515,8 +1252,10 @@ export class ChaiShuMatrixView extends ItemView {
     if (!book) return;
 
     const chapters = node.type === "chapter" ? [node] : collectChapters([node]);
+    const chartDim = book.dimensions.find((d) => d.isChart);
     for (const ch of chapters) {
       for (const dim of book.dimensions) {
+        if (dim.isChart) continue;
         const key = cellKey(ch.id, dim.id);
         const cell = book.cells[key];
         if (!cell?.filePath) continue;
@@ -1531,6 +1270,20 @@ export class ChaiShuMatrixView extends ItemView {
           }
         }
         cell.filePath = newPath;
+      }
+      if (chartDim && ch.emotionFile) {
+        const newEmotion = buildEmotionPath(book, ch.id, chartDim.name);
+        if (newEmotion !== ch.emotionFile) {
+          const f = this.app.vault.getAbstractFileByPath(ch.emotionFile);
+          if (f instanceof TFile) {
+            try {
+              await this.app.fileManager.renameFile(f, newEmotion);
+            } catch (e) {
+              /* skip */
+            }
+          }
+          ch.emotionFile = newEmotion;
+        }
       }
     }
 
@@ -1566,7 +1319,7 @@ export class ChaiShuMatrixView extends ItemView {
           name: sanitizeFileName(name),
           color,
           isChart: isChart || name === "情绪",
-          yAxisLabels: normalizeYAxisLabels(yAxisLabels),
+          yAxisLabels: yAxisLabels,
         };
         book.dimensions.push(dim);
         await this.plugin.saveSettings();
@@ -1588,7 +1341,7 @@ export class ChaiShuMatrixView extends ItemView {
         const newName = sanitizeFileName(name);
         dim.color = color;
         dim.isChart = isChart || newName === "情绪";
-        dim.yAxisLabels = normalizeYAxisLabels(yAxisLabels);
+        dim.yAxisLabels = yAxisLabels;
         if (newName !== dim.name) {
           await this.plugin.renameDimension(book.id, dim.id, newName);
         } else {
@@ -1618,7 +1371,7 @@ export class ChaiShuMatrixView extends ItemView {
     const book = this.book;
     if (!book) return;
     const chapters = collectChapters(book.structure).map((c) => ({ id: c.id, name: c.name }));
-    const dimensions = book.dimensions.map((d) => ({ id: d.id, name: d.name }));
+    const dimensions = book.dimensions.filter((d) => !d.isChart).map((d) => ({ id: d.id, name: d.name }));
     if (chapters.length === 0) {
       new Notice("请先添加章节");
       return;
@@ -1639,7 +1392,7 @@ export class ChaiShuMatrixView extends ItemView {
     if (!book) return;
     const chapter = findNode(book.structure, req.chapterId);
     const dim = book.dimensions.find((d) => d.id === req.dimensionId);
-    if (!chapter || !dim) {
+    if (!chapter || !dim || dim.isChart) {
       new Notice("目标章节或维度无效");
       return;
     }
@@ -1763,7 +1516,6 @@ export class ChaiShuMatrixView extends ItemView {
             ],
         structure,
         cells: {},
-        chapterEmotions: {},
       };
       settings.books.push(book);
       settings.activeBookId = book.id;
@@ -1828,6 +1580,10 @@ export class ChaiShuMatrixView extends ItemView {
     let n = 0;
     for (const ch of collectChapters(book.structure)) {
       for (const d of book.dimensions) {
+        if (d.isChart) {
+          if (ch.emotionFile && (ch.emotionData?.length ?? 0) >= 2) n++;
+          continue;
+        }
         const c = book.cells[cellKey(ch.id, d.id)];
         if (
           c?.hasContent &&

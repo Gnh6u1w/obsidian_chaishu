@@ -8,7 +8,6 @@ import {
   DEFAULT_SETTINGS,
   DIMENSION_COLORS,
   Dimension,
-  EmotionPoint,
   NodeData,
   NodeType,
   VIEW_TYPE_CHAISHU_MATRIX,
@@ -19,6 +18,7 @@ import {
   collectChapters,
   createNode,
   normalizeYAxisLabels,
+  parseEmotionData,
   sanitizeFileName,
   stripFrontmatter,
   uid,
@@ -69,6 +69,11 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         void this.onVaultDelete(file);
       })
     );
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        void this.onVaultModify(file);
+      })
+    );
   }
 
   onunload(): void {
@@ -115,7 +120,7 @@ export default class ChaiShuMatrixPlugin extends Plugin {
     return leaf && leaf.view instanceof ChaiShuMatrixView ? leaf.view : null;
   }
 
-  /** Rename a dimension label and sync the `维度` property in its existing notes. */
+  /** Rename a dimension label and sync the `dimension` property in its existing notes. */
   async renameDimension(bookId: string, dimId: string, newName: string): Promise<void> {
     const book = this.settings.books.find((b) => b.id === bookId);
     if (!book) return;
@@ -167,23 +172,22 @@ export default class ChaiShuMatrixPlugin extends Plugin {
 
     const storagePath = typeof b.storagePath === "string" ? b.storagePath : "";
 
-    let chapterEmotions: Record<string, EmotionPoint[]>;
+    // Legacy emotion data (V1.1 chartData / V1.2 chapterEmotions) → migrate to per-node emotionData.
+    const legacyEmotions: Record<string, { x: number; y: number }[]> = {};
     if (b.chapterEmotions && typeof b.chapterEmotions === "object") {
-      chapterEmotions = b.chapterEmotions;
+      for (const [k, v] of Object.entries(b.chapterEmotions)) {
+        if (Array.isArray(v)) legacyEmotions[k] = v as { x: number; y: number }[];
+      }
     } else if (b.chartData && typeof b.chartData === "object") {
-      // Migrate from V1.1 chartData (per-dimension, value 0..10) to per-chapter points.
-      chapterEmotions = {};
       for (const points of Object.values(b.chartData)) {
         if (!Array.isArray(points)) continue;
         for (const p of points as any[]) {
           if (!p?.chapterId) continue;
           const value = typeof p.value === "number" ? p.value : 0;
           const y = Math.max(1, Math.min(5, Math.round(value / 2.5) + 1));
-          (chapterEmotions[p.chapterId] ??= []).push({ x: 50, y });
+          (legacyEmotions[p.chapterId] ??= []).push({ x: 50, y });
         }
       }
-    } else {
-      chapterEmotions = {};
     }
 
     let structure: NodeData[];
@@ -221,6 +225,14 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       cells = {};
     }
 
+    for (const ch of collectChapters(structure)) {
+      const old = legacyEmotions[ch.id];
+      if (Array.isArray(old) && old.length > 0 && ch.emotionData.length === 0) {
+        const sorted = old.slice().sort((a, b) => a.x - b.x);
+        ch.emotionData = sorted.map((p) => Math.max(1, Math.min(5, Math.round(p.y) || 3)));
+      }
+    }
+
     return {
       id: b.id ?? uid("book"),
       bookInfo,
@@ -228,7 +240,6 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       dimensions,
       structure,
       cells,
-      chapterEmotions,
     };
   }
 
@@ -245,6 +256,10 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         ? n.children.map((c: any) => this.normalizeNode(c))
         : [],
       collapsed: !!n.collapsed,
+      emotionFile: typeof n.emotionFile === "string" ? n.emotionFile : "",
+      emotionData: Array.isArray(n.emotionData)
+        ? (n.emotionData as unknown[]).map((v) => Number(v)).filter((v) => Number.isFinite(v))
+        : [],
     };
   }
 
@@ -278,6 +293,10 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           node.summaryFile = file.path;
           changed = true;
         }
+        if (node.emotionFile === oldPath) {
+          node.emotionFile = file.path;
+          changed = true;
+        }
       }
     }
     if (changed) {
@@ -303,6 +322,33 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           node.summaryFile = "";
           node.summaryHasContent = false;
           changed = true;
+        }
+        if (node.emotionFile === file.path) {
+          node.emotionFile = "";
+          node.emotionData = [];
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      await this.saveSettings();
+      this.notifyViews();
+    }
+  }
+
+  private async onVaultModify(file: TAbstractFile): Promise<void> {
+    if (!(file instanceof TFile)) return;
+    let changed = false;
+    for (const book of this.settings.books) {
+      for (const ch of collectChapters(book.structure)) {
+        if (ch.emotionFile === file.path) {
+          try {
+            const content = await this.app.vault.cachedRead(file);
+            ch.emotionData = parseEmotionData(content);
+            changed = true;
+          } catch (e) {
+            /* ignore read errors */
+          }
         }
       }
     }

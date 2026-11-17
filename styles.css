@@ -479,6 +479,34 @@ tr.chs-drop-root {
   height: 28px;
 }
 
+/* Row-head emotion sparkline */
+.chs-node-chart-btn {
+  width: 34px;
+  height: 28px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+}
+
+.chs-sparkline {
+  display: block;
+}
+
+.chs-spark-empty {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.chs-spark-empty svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chs-cell-emotion-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 /* Cells */
 .chs-cell {
   min-width: 150px;

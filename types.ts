@@ -6,7 +6,7 @@ export interface Dimension {
   id: string;
   name: string;
   color: string;
-  /** When true, this dimension exposes the emotion-chart drawing. */
+  /** When true, this dimension owns the emotion line (one per chapter). */
   isChart: boolean;
   /** 5 labels for the emotion Y-axis (from lowest to highest). */
   yAxisLabels: string[];
@@ -21,6 +21,10 @@ export interface NodeData {
   summaryHasContent: boolean;
   children: NodeData[];
   collapsed: boolean;
+  /** Chapter-only: path of the emotion-line note, "" when not created. */
+  emotionFile: string;
+  /** Chapter-only: emotion values (1..5) cached from the emotion note. */
+  emotionData: number[];
 }
 
 export interface BookInfo {
@@ -40,13 +44,6 @@ export interface CellData {
   hasContent: boolean;
 }
 
-export interface EmotionPoint {
-  /** Plot progress 0..100. */
-  x: number;
-  /** Emotion level 1..5 (1 = lowest, 5 = highest). */
-  y: number;
-}
-
 export interface BookData {
   id: string;
   bookInfo: BookInfo;
@@ -55,8 +52,6 @@ export interface BookData {
   dimensions: Dimension[];
   structure: NodeData[];
   cells: Record<string, CellData>;
-  /** Emotion points per chapter id (the emotion chart is per-book). */
-  chapterEmotions: Record<string, EmotionPoint[]>;
 }
 
 export interface ImportRequest {
