@@ -1,0 +1,498 @@
+/* ==========================================================================
+   ChaiShu Matrix Pro — styles
+   Touch-friendly, light/dark theme aware, mobile responsive.
+   ========================================================================== */
+
+.chs-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 8px 10px;
+  box-sizing: border-box;
+}
+
+/* ---------------------------------------------------------------- top bar */
+.chs-topbar {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+.chs-book-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chs-book-label {
+  font-weight: 600;
+  color: var(--text-normal);
+  font-size: 14px;
+}
+
+.chs-select {
+  flex: 1 1 160px;
+  min-width: 140px;
+  height: 40px;
+  padding: 0 10px;
+  font-size: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+/* ------------------------------------------------------------ book info */
+.chs-bookinfo {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chs-field-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------- inputs */
+.chs-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  font-size: 16px; /* >=16px prevents iOS auto-zoom on focus */
+  border-radius: 8px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  box-sizing: border-box;
+}
+
+.chs-input:focus {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 1px var(--interactive-accent);
+  outline: none;
+}
+
+.chs-count-input {
+  width: 64px;
+  flex: 0 0 auto;
+  text-align: center;
+}
+
+/* --------------------------------------------------------------- buttons */
+.chs-btn {
+  height: 40px;
+  min-height: 40px;
+  padding: 0 14px;
+  font-size: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.chs-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.chs-btn-primary {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.chs-btn-primary:hover {
+  background: var(--interactive-accent-hover);
+}
+
+.chs-btn-ghost {
+  background: transparent;
+}
+
+.chs-btn-danger-text {
+  color: var(--text-error);
+  border-color: var(--text-error);
+  background: transparent;
+}
+
+.chs-btn-sm {
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+/* --------------------------------------------------------------- toolbar */
+.chs-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-secondary);
+}
+
+.chs-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chs-toolbar-mid {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chs-tb-label {
+  font-size: 14px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.chs-stats {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- matrix */
+.chs-matrix-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary);
+  -webkit-overflow-scrolling: touch;
+}
+
+.chs-matrix {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+}
+
+.chs-matrix th,
+.chs-matrix td {
+  box-sizing: border-box;
+}
+
+/* Header (dimension columns) */
+.chs-corner {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  min-width: 96px;
+  min-height: 40px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border-right: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: center;
+}
+
+.chs-dim-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-width: 150px;
+  padding: 6px 8px;
+  background: var(--background-secondary);
+  border-right: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: center;
+  cursor: pointer;
+}
+
+.chs-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--chs-color, var(--interactive-accent));
+  background: var(--background-primary);
+  background: color-mix(in srgb, var(--chs-color, var(--interactive-accent)) 12%, transparent);
+}
+
+.chs-capsule-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.chs-capsule-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chs-add-dim-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  min-width: 150px;
+  padding: 6px 8px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: center;
+}
+
+/* Chapter column (rows) */
+.chs-chapter-head {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 96px;
+  padding: 6px 8px;
+  background: var(--background-secondary);
+  border-right: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.chs-chapter-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.chs-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-left: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.chs-icon-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-error);
+}
+
+/* Cells */
+.chs-cell {
+  min-width: 150px;
+  min-height: 72px;
+  padding: 0;
+  vertical-align: top;
+  cursor: pointer;
+  border-right: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.chs-cell.is-empty {
+  background: var(--background-secondary);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--background-modifier-border) 0,
+    var(--background-modifier-border) 1px,
+    transparent 1px,
+    transparent 8px
+  );
+}
+
+.chs-cell.is-filled {
+  background: var(--background-primary);
+  box-shadow: inset 3px 0 0 var(--chs-color, var(--interactive-accent));
+}
+
+.chs-cell-plus {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 8px;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.chs-cell-plus svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chs-cell-hint {
+  display: block;
+  padding: 0 8px 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.chs-cell-body {
+  padding: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-normal);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+}
+
+.chs-cell-filler {
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  min-width: 150px;
+}
+
+.chs-add-row .chs-cell-filler {
+  background: var(--background-primary);
+}
+
+.chs-add-row td {
+  border-bottom: none;
+}
+
+.chs-add-chapter {
+  background: var(--background-primary);
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+/* -------------------------------------------------------------- empty */
+.chs-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.chs-empty-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+/* ---------------------------------------------------------------- modals */
+.chs-modal h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.chs-modal p {
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.chs-modal-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.chs-modal-actions button {
+  height: 40px;
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 15px;
+  border-radius: 8px;
+}
+
+.chs-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+
+.chs-swatch {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  box-sizing: border-box;
+}
+
+.chs-swatch.is-active {
+  border-color: var(--text-normal);
+  box-shadow: 0 0 0 2px var(--background-primary) inset;
+}
+
+.chs-textarea {
+  width: 100%;
+  min-height: 40vh;
+  font-size: 16px;
+  line-height: 1.6;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+/* -------------------------------------------------------- mobile / narrow */
+@media (max-width: 640px) {
+  .chs-view {
+    padding: 6px;
+  }
+
+  .chs-bookinfo {
+    grid-template-columns: 1fr;
+  }
+
+  .chs-stats {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .chs-toolbar-mid {
+    display: none;
+  }
+
+  .chs-cell,
+  .chs-cell-filler {
+    min-width: 120px;
+  }
+
+  .chs-dim-head,
+  .chs-add-dim-head {
+    min-width: 120px;
+  }
+}

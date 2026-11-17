@@ -1,0 +1,10 @@
+{
+  "id": "chaishu-matrix-pro",
+  "name": "ChaiShu Matrix Pro",
+  "version": "1.0.0",
+  "minAppVersion": "1.5.0",
+  "description": "书名矩阵专业版：章节×维度的可视化拆书矩阵，单元格与 Obsidian 笔记双向联动、自动归档。",
+  "author": "Gnh6u1w",
+  "authorUrl": "https://github.com/Gnh6u1w",
+  "isDesktopOnly": false
+}

@@ -1,0 +1,16 @@
+# Node
+node_modules/
+*.log
+
+# Build artifacts (main.js is intentionally committed)
+*.js
+*.js.map
+!main.js
+!esbuild.config.mjs
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

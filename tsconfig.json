@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "target": "ES2018",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "lib": ["DOM", "ES2018"],
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "allowJs": false,
+    "inlineSourceMap": true,
+    "inlineSources": true
+  },
+  "include": ["**/*.ts"]
+}
