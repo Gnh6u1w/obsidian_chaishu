@@ -412,7 +412,19 @@
   white-space: nowrap;
 }
 
+/* Collapse the outline column WITHOUT removing the <td> from the table layout:
+   `display:none` on a cell makes the remaining cells shift into column 1 under
+   `table-layout:fixed`, which caused the V1.6 misalignment. Keep the cell but
+   narrow it and hide its children so dimension cells stay in their columns. */
 .chs-matrix.chs-outline-collapsed .chs-node {
+  width: 34px;
+  min-width: 34px;
+  max-width: 34px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chs-matrix.chs-outline-collapsed .chs-node > * {
   display: none;
 }
 

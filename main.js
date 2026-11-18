@@ -110,6 +110,16 @@ function stripReturnFooter(body) {
   const idx = body.indexOf(RETURN_MARKER);
   return (idx === -1 ? body : body.slice(0, idx)).replace(/\s+$/, "");
 }
+async function ensureReturnFooter(vault, file) {
+  let content = "";
+  try {
+    content = await vault.cachedRead(file);
+  } catch (e) {
+    return;
+  }
+  if (content.includes(RETURN_MARKER)) return;
+  await vault.modify(file, content.replace(/\s+$/, "") + RETURN_FOOTER);
+}
 function stripFrontmatter(content) {
   let body = content;
   if (content.startsWith("---")) {
@@ -1940,6 +1950,8 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       cell.hasContent = false;
       await this.plugin.saveSettings();
       this.renderMatrix();
+    } else {
+      await ensureReturnFooter(this.app.vault, file);
     }
     await this.openInEditor(file.path);
   }
@@ -1979,6 +1991,8 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       node.summaryHasContent = false;
       await this.plugin.saveSettings();
       this.renderMatrix();
+    } else {
+      await ensureReturnFooter(this.app.vault, file);
     }
     await this.openInEditor(file.path);
   }

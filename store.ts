@@ -52,6 +52,19 @@ export function stripReturnFooter(body: string): string {
   return (idx === -1 ? body : body.slice(0, idx)).replace(/\s+$/, "");
 }
 
+/** Ensure a note ends with the return-link footer, adding it when missing.
+ *  Needed for notes created by versions predating the return link (V1.5+). */
+export async function ensureReturnFooter(vault: Vault, file: TFile): Promise<void> {
+  let content = "";
+  try {
+    content = await vault.cachedRead(file);
+  } catch (e) {
+    return;
+  }
+  if (content.includes(RETURN_MARKER)) return;
+  await vault.modify(file, content.replace(/\s+$/, "") + RETURN_FOOTER);
+}
+
 /** Strip a leading YAML frontmatter block (and any return-link footer), returning the note body. */
 export function stripFrontmatter(content: string): string {
   let body = content;

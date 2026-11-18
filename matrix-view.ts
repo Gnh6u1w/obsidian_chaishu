@@ -28,6 +28,7 @@ import {
   createChapterNote,
   createNode,
   createSummaryNote,
+  ensureReturnFooter,
   findNode,
   findParentArray,
   isSelfOrDescendant,
@@ -907,6 +908,9 @@ export class ChaiShuMatrixView extends ItemView {
       cell.hasContent = false;
       await this.plugin.saveSettings();
       this.renderMatrix();
+    } else {
+      // Add the return-link footer to notes created by older versions.
+      await ensureReturnFooter(this.app.vault, file);
     }
     await this.openInEditor(file.path);
   }
@@ -950,6 +954,8 @@ export class ChaiShuMatrixView extends ItemView {
       node.summaryHasContent = false;
       await this.plugin.saveSettings();
       this.renderMatrix();
+    } else {
+      await ensureReturnFooter(this.app.vault, file);
     }
     await this.openInEditor(file.path);
   }
