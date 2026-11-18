@@ -40,14 +40,132 @@ function yamlString(s: string): string {
   return str;
 }
 
-/** Strip a leading YAML frontmatter block, returning the note body. */
+// ------------------------------------------------------------- return link
+// The protocol handler is registered in main.ts as "chaishu-matrix-pro".
+const RETURN_MARKER = "<!-- chs-return -->";
+const RETURN_LINK_MD = "[🔙 返回拆书矩阵](obsidian://chaishu-matrix-pro)";
+const RETURN_FOOTER = "\n\n---\n\n" + RETURN_MARKER + "\n" + RETURN_LINK_MD + "\n";
+
+/** Strip a previously-appended return-link footer so it never duplicates. */
+export function stripReturnFooter(body: string): string {
+  const idx = body.indexOf(RETURN_MARKER);
+  return (idx === -1 ? body : body.slice(0, idx)).replace(/\s+$/, "");
+}
+
+/** Strip a leading YAML frontmatter block (and any return-link footer), returning the note body. */
 export function stripFrontmatter(content: string): string {
-  if (!content.startsWith("---")) return content;
-  const firstEnd = content.indexOf("\n---", 3);
-  if (firstEnd === -1) return content;
-  const after = content.indexOf("\n", firstEnd + 4);
-  if (after === -1) return "";
-  return content.slice(after + 1);
+  let body = content;
+  if (content.startsWith("---")) {
+    const firstEnd = content.indexOf("\n---", 3);
+    if (firstEnd !== -1) {
+      const after = content.indexOf("\n", firstEnd + 4);
+      body = after === -1 ? "" : content.slice(after + 1);
+    }
+  }
+  return stripReturnFooter(body);
+}
+
+// --------------------------------------------------------- natural sorting
+// Supports Arabic numerals (第2章 < 第10章), Chinese numerals (第十二章) and
+// basic English number words (Chapter Two), so chapters auto-sort sensibly.
+
+const CN_DIGITS: Record<string, number> = {
+  零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+};
+
+const EN_NUM: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
+  nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
+  sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30,
+  forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90,
+};
+
+function parseChineseNum(s: string): number | null {
+  let total = 0;
+  let section = 0;
+  let num = 0;
+  let any = false;
+  for (const ch of s) {
+    if (ch in CN_DIGITS) {
+      num = CN_DIGITS[ch];
+      any = true;
+    } else if (ch === "十") {
+      section += (num || 1) * 10;
+      num = 0;
+      any = true;
+    } else if (ch === "百") {
+      section += (num || 1) * 100;
+      num = 0;
+      any = true;
+    } else if (ch === "千") {
+      section += (num || 1) * 1000;
+      num = 0;
+      any = true;
+    } else if (ch === "万") {
+      section = (section + num) * 10000;
+      total += section;
+      section = 0;
+      num = 0;
+      any = true;
+    } else {
+      return null;
+    }
+  }
+  return any ? total + section + num : null;
+}
+
+function tokenize(s: string): (string | number)[] {
+  const tokens: (string | number)[] = [];
+  const re = /(\d+)|([零一二两三四五六七八九十百千万]+)|([A-Za-z]+)/g;
+  let m: RegExpExecArray | null;
+  let last = 0;
+  while ((m = re.exec(s))) {
+    if (m.index > last) tokens.push(s.slice(last, m.index));
+    if (m[1] !== undefined) {
+      tokens.push(parseInt(m[1], 10));
+    } else if (m[2] !== undefined) {
+      const cn = parseChineseNum(m[2]);
+      tokens.push(cn ?? m[2]);
+    } else if (m[3] !== undefined) {
+      const en = EN_NUM[m[3].toLowerCase()];
+      tokens.push(en ?? m[3]);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) tokens.push(s.slice(last));
+  return tokens;
+}
+
+/** Natural-order comparator for node names (chapter names in particular). */
+export function naturalCompare(a: string, b: string): number {
+  const ta = tokenize(String(a));
+  const tb = tokenize(String(b));
+  const n = Math.max(ta.length, tb.length);
+  for (let i = 0; i < n; i++) {
+    const x = ta[i];
+    const y = tb[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (typeof x === "number" && typeof y === "number") {
+      if (x !== y) return x - y;
+    } else {
+      const c = String(x).localeCompare(String(y), "zh-Hans-CN", { numeric: true, sensitivity: "base" });
+      if (c !== 0) return c;
+    }
+  }
+  return 0;
+}
+
+/** Stable-sort only the chapter siblings within an array (containers keep their positions). */
+export function sortChapterSiblings(arr: NodeData[]): void {
+  const idxs: number[] = [];
+  arr.forEach((n, i) => {
+    if (n.type === "chapter") idxs.push(i);
+  });
+  const chapters = idxs.map((i) => arr[i]).sort((a, b) => naturalCompare(a.name, b.name));
+  idxs.forEach((idx, k) => {
+    arr[idx] = chapters[k];
+  });
 }
 
 // ---------------------------------------------------------------- tree ops
@@ -239,16 +357,15 @@ export function buildChapterContent(
   const ctx = findNodeContext(book.structure, chapterId);
   const lines = [
     "---",
-    "type: " + yamlString("拆书矩阵"),
-    "book: " + yamlString(bookFolderName(book.bookInfo.title)),
+    "拆书项目: " + yamlString(bookFolderName(book.bookInfo.title)),
   ];
-  if (ctx?.volume) lines.push("volume: " + yamlString(ctx.volume.name));
-  if (ctx?.unit) lines.push("unit: " + yamlString(ctx.unit.name));
-  lines.push("chapter: " + yamlString(ctx ? ctx.node.name : "章节"));
-  lines.push("dimension: " + yamlString(dimension.name));
+  if (ctx?.volume) lines.push("所属卷: " + yamlString(ctx.volume.name));
+  if (ctx?.unit) lines.push("所属单元: " + yamlString(ctx.unit.name));
+  lines.push("章节名称: " + yamlString(ctx ? ctx.node.name : "章节"));
+  lines.push("分析维度: " + yamlString(dimension.name));
   lines.push("---", "");
-  const normalizedBody = body ? body.replace(/\r\n/g, "\n") : "";
-  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "");
+  const normalizedBody = stripReturnFooter(body ? body.replace(/\r\n/g, "\n") : "");
+  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "") + RETURN_FOOTER;
 }
 
 export function buildSummaryContent(
@@ -267,10 +384,10 @@ export function buildSummaryContent(
     if (ctx?.volume) lines.push("所属卷: " + yamlString(ctx.volume.name));
     lines.push("单元名: " + yamlString(node.name));
   }
-  lines.push("书名: " + yamlString(bookFolderName(book.bookInfo.title)));
+  lines.push("拆书项目: " + yamlString(bookFolderName(book.bookInfo.title)));
   lines.push("---", "");
-  const normalizedBody = body ? body.replace(/\r\n/g, "\n") : "";
-  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "");
+  const normalizedBody = stripReturnFooter(body ? body.replace(/\r\n/g, "\n") : "");
+  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "") + RETURN_FOOTER;
 }
 
 // ---------------------------------------------------------------- vault io

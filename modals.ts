@@ -30,10 +30,60 @@ const EMO_PAD_BOTTOM = 30;
 const EMO_HEIGHT = 250;
 const EMO_PLOT_W = 520;
 
+let emoClipSeq = 0;
+
 function makeSvgEl(tag: string, attrs: Record<string, string>): SVGElement {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
+}
+
+/** Minimal single-line text prompt (used for naming a new collected unit). */
+export class PromptModal extends Modal {
+  private value = "";
+
+  constructor(
+    app: App,
+    private opts: {
+      title: string;
+      placeholder?: string;
+      initial?: string;
+      confirmText?: string;
+      onConfirm: (value: string) => void;
+    }
+  ) {
+    super(app);
+    this.value = opts.initial ?? "";
+  }
+
+  onOpen(): void {
+    this.contentEl.addClass("chs-modal");
+    this.contentEl.createEl("h2", { text: this.opts.title });
+    const input = this.contentEl.createEl("input", { type: "text", cls: "chs-input" });
+    input.value = this.value;
+    input.placeholder = this.opts.placeholder ?? "";
+    input.addEventListener("input", () => (this.value = input.value));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        this.opts.onConfirm(this.value);
+        this.close();
+      }
+    });
+    const footer = this.contentEl.createDiv("chs-modal-actions");
+    new ButtonComponent(footer).setButtonText("取消").onClick(() => this.close());
+    new ButtonComponent(footer)
+      .setButtonText(this.opts.confirmText ?? "确定")
+      .setCta()
+      .onClick(() => {
+        this.opts.onConfirm(this.value);
+        this.close();
+      });
+    setTimeout(() => input.focus(), 0);
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
 }
 
 export class BookCreateModal extends Modal {
@@ -689,6 +739,11 @@ export class EmotionEditorModal extends Modal {
   private eraser = false;
   private dragging = false;
   private dragIndex = -1;
+  // Tap-vs-drag disambiguation + rAF throttle (mobile anti-mistouch).
+  private pending = false;
+  private downX = 0;
+  private downY = 0;
+  private rafId: number | null = null;
 
   constructor(
     app: App,
@@ -715,7 +770,7 @@ export class EmotionEditorModal extends Modal {
 
   private xPx(i: number): number {
     const n = this.data.length;
-    if (n <= 1) return EMO_PAD_LEFT + EMO_PLOT_W / 2;
+    if (n <= 1) return EMO_PAD_LEFT; // pin the first point to the X origin
     return EMO_PAD_LEFT + (i / (n - 1)) * EMO_PLOT_W;
   }
 
@@ -818,6 +873,22 @@ export class EmotionEditorModal extends Modal {
     xAxis.setAttribute("stroke-width", "1");
     svg.appendChild(xAxis);
 
+    // Clip the polyline + points to the plot rect so nothing draws past the right edge.
+    const clipId = "chs-emo-clip-" + emoClipSeq++;
+    const defs = makeSvgEl("defs", {});
+    const clip = makeSvgEl("clipPath", {});
+    clip.setAttribute("id", clipId);
+    clip.appendChild(
+      makeSvgEl("rect", {
+        x: String(EMO_PAD_LEFT),
+        y: String(EMO_PAD_TOP),
+        width: String(EMO_PLOT_W),
+        height: String(plotH),
+      })
+    );
+    defs.appendChild(clip);
+    svg.appendChild(defs);
+
     const poly = makeSvgEl("polyline", {
       points: "",
       fill: "none",
@@ -826,65 +897,113 @@ export class EmotionEditorModal extends Modal {
       "stroke-linecap": "round",
     });
     poly.setAttribute("stroke", this.opts.color);
+    poly.setAttribute("clip-path", "url(#" + clipId + ")");
     svg.appendChild(poly);
     this.polyEl = poly;
 
     const pointsG = makeSvgEl("g", {});
+    pointsG.setAttribute("clip-path", "url(#" + clipId + ")");
     svg.appendChild(pointsG);
     this.pointsEl = pointsG;
 
     svg.addEventListener("pointerdown", (e) => {
       e.preventDefault();
-      this.onPointer(e as PointerEvent, true);
+      this.onPointerDown(e as PointerEvent);
     });
     svg.addEventListener("pointermove", (e) => {
-      if (this.dragging) this.onPointer(e as PointerEvent, false);
+      if (this.pending || this.dragging) this.onPointerMove(e as PointerEvent);
     });
-    const stop = () => {
-      this.dragging = false;
-      this.dragIndex = -1;
-    };
-    svg.addEventListener("pointerup", stop);
-    svg.addEventListener("pointerleave", stop);
+    const finish = () => this.onPointerUp();
+    svg.addEventListener("pointerup", finish);
+    svg.addEventListener("pointercancel", finish);
+    svg.addEventListener("pointerleave", finish);
 
     scroll.appendChild(svg);
     this.svgEl = svg as SVGSVGElement;
     this.updateLine();
   }
 
-  private onPointer(e: PointerEvent, down: boolean): void {
+  private onPointerDown(e: PointerEvent): void {
+    const svg = this.svgEl;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    this.downX = e.clientX - rect.left;
+    this.downY = e.clientY - rect.top;
+    this.pending = true;
+    this.dragging = false;
+    this.dragIndex = this.nearestPoint(this.downX, this.downY);
+  }
+
+  private onPointerMove(e: PointerEvent): void {
     const svg = this.svgEl;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
-    const level = this.levelAt(py);
 
-    if (down) {
-      this.dragging = true;
-      const idx = this.nearestPoint(px, py);
-      if (idx !== -1) {
-        if (this.eraser) {
-          this.data.splice(idx, 1);
-          this.dragging = false;
-          this.render();
-          return;
-        }
-        this.dragIndex = idx;
-        this.data[idx] = level;
-      } else if (!this.eraser) {
-        const n = this.data.length;
-        const rel = Math.max(0, Math.min(1, (px - EMO_PAD_LEFT) / EMO_PLOT_W));
-        const insertAt = n === 0 ? 0 : Math.max(0, Math.min(n, Math.round(rel * n)));
-        this.data.splice(insertAt, 0, level);
-        this.dragIndex = insertAt;
-      } else {
+    if (this.pending) {
+      const dx = px - this.downX;
+      const dy = py - this.downY;
+      if (dx * dx + dy * dy < 36) return; // < 6px: still a tap
+      // Commit to a drag.
+      this.pending = false;
+      if (this.eraser) {
         this.dragging = false;
+        return;
+      }
+      if (this.dragIndex !== -1) {
+        this.dragging = true;
+      } else {
+        this.dragIndex = this.insertAt(this.downX);
+        this.data.splice(this.dragIndex, 0, this.levelAt(this.downY));
+        this.dragging = true;
       }
     }
 
     if (this.dragging && this.dragIndex >= 0 && this.dragIndex < this.data.length) {
-      this.data[this.dragIndex] = level;
+      this.data[this.dragIndex] = this.levelAt(py);
+    }
+    this.scheduleUpdate();
+  }
+
+  private onPointerUp(): void {
+    if (this.pending) {
+      this.pending = false;
+      if (this.eraser) {
+        if (this.dragIndex !== -1) {
+          this.data.splice(this.dragIndex, 1);
+          this.dragIndex = -1;
+          this.render();
+        }
+      } else if (this.dragIndex === -1) {
+        const insertAt = this.insertAt(this.downX);
+        this.data.splice(insertAt, 0, this.levelAt(this.downY));
+      }
+    }
+    this.dragging = false;
+    this.dragIndex = -1;
+    this.flushUpdate();
+  }
+
+  private insertAt(px: number): number {
+    const n = this.data.length;
+    if (n === 0) return 0;
+    const rel = Math.max(0, Math.min(1, (px - EMO_PAD_LEFT) / EMO_PLOT_W));
+    return Math.max(0, Math.min(n, Math.round(rel * n)));
+  }
+
+  private scheduleUpdate(): void {
+    if (this.rafId !== null) return;
+    this.rafId = requestAnimationFrame(() => {
+      this.rafId = null;
+      this.updateLine();
+    });
+  }
+
+  private flushUpdate(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
     }
     this.updateLine();
   }
@@ -925,6 +1044,10 @@ export class EmotionEditorModal extends Modal {
   }
 
   onClose(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
     this.contentEl.empty();
   }
 }

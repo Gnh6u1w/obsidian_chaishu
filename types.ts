@@ -70,6 +70,8 @@ export interface ChaiShuSettings {
   defaultDimensionNames: string;
   defaultStoragePath: string;
   activeBookId: string;
+  /** Collapse the left outline column (◀/▶) to free up matrix space. */
+  outlineCollapsed: boolean;
   books: BookData[];
 }
 
@@ -78,6 +80,7 @@ export const DEFAULT_SETTINGS: ChaiShuSettings = {
   defaultDimensionNames: "情绪,长期期待,中期期待,冲突",
   defaultStoragePath: "",
   activeBookId: "",
+  outlineCollapsed: false,
   books: [],
 };
 

@@ -247,6 +247,34 @@
   white-space: nowrap;
 }
 
+/* Multi-select bar (quick collection) */
+.chs-selectbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--interactive-accent);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.chs-selectbar-count {
+  font-size: 13px;
+  color: var(--text-normal);
+  white-space: nowrap;
+}
+
+.chs-select-cb {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  cursor: pointer;
+  accent-color: var(--interactive-accent);
+}
+
 /* ------------------------------------------------------------ chart panel */
 .chs-chart-panel {
   flex: 0 0 auto;
@@ -318,9 +346,16 @@
   -webkit-overflow-scrolling: touch;
 }
 
+.chs-view {
+  /* Fixed column widths used by the matrix <colgroup> (table-layout: fixed). */
+  --chs-node-w: 200px;
+  --chs-col-w: 150px;
+}
+
 .chs-matrix {
   border-collapse: separate;
   border-spacing: 0;
+  table-layout: fixed;
   width: max-content;
   min-width: 100%;
 }
@@ -335,7 +370,8 @@
   top: 0;
   left: 0;
   z-index: 4;
-  min-width: 160px;
+  width: var(--chs-node-w);
+  min-width: var(--chs-node-w);
   min-height: 40px;
   padding: 6px 8px;
   font-size: 12px;
@@ -344,13 +380,53 @@
   border-right: 1px solid var(--background-modifier-border);
   border-bottom: 1px solid var(--background-modifier-border);
   text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+}
+
+.chs-outline-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  padding: 0;
+}
+
+.chs-outline-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chs-corner-label {
+  white-space: nowrap;
+}
+
+.chs-matrix.chs-outline-collapsed .chs-node {
+  display: none;
+}
+
+.chs-matrix.chs-outline-collapsed .chs-corner {
+  width: 34px;
+  min-width: 34px;
+  padding: 6px 3px;
 }
 
 .chs-dim-head {
   position: sticky;
   top: 0;
   z-index: 3;
-  min-width: 150px;
+  width: var(--chs-col-w);
+  min-width: var(--chs-col-w);
   padding: 6px 8px;
   background: var(--background-secondary);
   border-right: 1px solid var(--background-modifier-border);
@@ -391,7 +467,8 @@
   position: sticky;
   top: 0;
   z-index: 3;
-  min-width: 150px;
+  width: var(--chs-col-w);
+  min-width: var(--chs-col-w);
   padding: 6px 8px;
   background: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
@@ -403,8 +480,9 @@
   position: sticky;
   left: 0;
   z-index: 2;
-  min-width: 160px;
-  max-width: 260px;
+  width: var(--chs-node-w);
+  min-width: var(--chs-node-w);
+  max-width: var(--chs-node-w);
   padding: 6px 8px;
   background: var(--background-secondary);
   border-right: 1px solid var(--background-modifier-border);
@@ -463,6 +541,11 @@ tr.chs-drop-root {
   color: var(--text-normal);
   vertical-align: middle;
   word-break: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
 }
 
 .chs-node-summary-btn {
@@ -509,7 +592,9 @@ tr.chs-drop-root {
 
 /* Cells */
 .chs-cell {
-  min-width: 150px;
+  width: var(--chs-col-w);
+  min-width: var(--chs-col-w);
+  max-width: var(--chs-col-w);
   min-height: 72px;
   padding: 0;
   vertical-align: top;
@@ -564,6 +649,10 @@ tr.chs-drop-root {
   white-space: pre-wrap;
   word-break: break-word;
   overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  text-overflow: ellipsis;
 }
 
 /* Summary cells (volume / unit rows) */
@@ -602,12 +691,17 @@ tr.chs-drop-root {
   white-space: pre-wrap;
   word-break: break-word;
   overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  text-overflow: ellipsis;
 }
 
 .chs-cell-filler {
   border-bottom: 1px solid var(--background-modifier-border);
   background: var(--background-secondary);
-  min-width: 150px;
+  width: var(--chs-col-w);
+  min-width: var(--chs-col-w);
 }
 
 .chs-add-row .chs-cell-filler {
@@ -800,13 +894,25 @@ tr.chs-drop-root {
     -webkit-overflow-scrolling: touch;
   }
 
+  .chs-view {
+    --chs-node-w: 140px;
+    --chs-col-w: 120px;
+  }
+
   .chs-bookinfo {
-    flex-direction: column;
-    align-items: stretch;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    align-items: end;
   }
 
   .chs-field {
     min-width: 0;
+    gap: 0;
+  }
+
+  .chs-field-label {
+    display: none;
   }
 
   .chs-input {
@@ -834,20 +940,5 @@ tr.chs-drop-root {
 
   .chs-chart-body {
     max-height: 40vh;
-  }
-
-  .chs-cell,
-  .chs-cell-filler,
-  .chs-summary {
-    min-width: 120px;
-  }
-
-  .chs-dim-head,
-  .chs-add-dim-head {
-    min-width: 120px;
-  }
-
-  .chs-node {
-    min-width: 140px;
   }
 }

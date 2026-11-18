@@ -32,19 +32,19 @@ import {
   isSelfOrDescendant,
   removeNode,
   sanitizeFileName,
+  sortChapterSiblings,
   stripFrontmatter,
   uid,
 } from "./store";
 import {
   BookCreateModal,
-  CellEditModal,
   ConfirmModal,
   DimensionModal,
   EmotionEditorModal,
   ImportModal,
   MoveNodeModal,
+  PromptModal,
   StoragePathModal,
-  SummaryModal,
   WallpaperModal,
 } from "./modals";
 
@@ -123,6 +123,13 @@ export class ChaiShuMatrixView extends ItemView {
   // Drag state
   private dragNodeId: string | null = null;
   private dragOverTargetId: string | null = null;
+  private dragRafId: number | null = null;
+
+  // Multi-select (quick collection) state
+  private selectMode = false;
+  private selectedChapterIds = new Set<string>();
+  private selectBarEl!: HTMLElement;
+  private selectCountEl!: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, plugin: ChaiShuMatrixPlugin) {
     super(leaf);
@@ -170,6 +177,8 @@ export class ChaiShuMatrixView extends ItemView {
     this.observer = null;
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     this.saveTimer = null;
+    if (this.dragRafId !== null) cancelAnimationFrame(this.dragRafId);
+    this.dragRafId = null;
     this.plugin.views.delete(this);
     this.contentEl.empty();
   }
@@ -368,8 +377,13 @@ export class ChaiShuMatrixView extends ItemView {
     addUnit.addEventListener("click", () => this.addUnit());
     const importBtn = mid.createEl("button", { text: "📥 导入", cls: "chs-btn" });
     importBtn.addEventListener("click", () => this.openImportModal());
+    const multiBtn = mid.createEl("button", { text: "☑ 多选", cls: "chs-btn" });
+    multiBtn.addEventListener("click", () => this.setSelectMode(!this.selectMode));
 
     this.statsEl = tb.createDiv("chs-stats");
+
+    this.selectBarEl = this.wrapEl.createDiv("chs-selectbar");
+    this.renderSelectBar();
   }
 
   private readAddCount(input: HTMLInputElement): number {
@@ -426,10 +440,24 @@ export class ChaiShuMatrixView extends ItemView {
     const table = this.matrixEl;
     table.empty();
 
+    // Fixed column widths (used with `table-layout: fixed` in styles.css).
+    const colgroup = table.createEl("colgroup");
+    const nodeCol = colgroup.createEl("col");
+    nodeCol.style.width = "var(--chs-node-w, 200px)";
+    for (const dim of book.dimensions) {
+      const c = colgroup.createEl("col");
+      c.style.width = "var(--chs-col-w, 150px)";
+    }
+    const fillerCol = colgroup.createEl("col");
+    fillerCol.style.width = "var(--chs-col-w, 150px)";
+
+    const collapsed = this.settings.outlineCollapsed;
+    table.toggleClass("chs-outline-collapsed", collapsed);
+
     const thead = table.createEl("thead");
     const headRow = thead.createEl("tr");
     const corner = headRow.createEl("th", { cls: "chs-corner" });
-    corner.setText("大纲 / 章节");
+    this.renderCorner(corner, collapsed);
 
     for (const dim of book.dimensions) {
       const th = headRow.createEl("th", { cls: "chs-dim-head" });
@@ -462,6 +490,20 @@ export class ChaiShuMatrixView extends ItemView {
     for (let i = 0; i < book.dimensions.length + 1; i++) {
       addTr.createEl("td", { cls: "chs-cell-filler" });
     }
+  }
+
+  private renderCorner(corner: HTMLElement, collapsed: boolean): void {
+    const btn = corner.createEl("button", { cls: "chs-outline-toggle" });
+    btn.setAttribute("aria-label", collapsed ? "展开大纲" : "收起大纲");
+    setIcon(btn, collapsed ? "chevron-right" : "chevron-left");
+    if (!collapsed) {
+      corner.createSpan("chs-corner-label").setText("大纲 / 章节");
+    }
+    btn.addEventListener("click", () => {
+      this.settings.outlineCollapsed = !this.settings.outlineCollapsed;
+      void this.plugin.saveSettings();
+      this.renderMatrix();
+    });
   }
 
   private renderNodeRow(tbody: HTMLElement, node: NodeData, depth: number): void {
@@ -503,10 +545,20 @@ export class ChaiShuMatrixView extends ItemView {
   }
 
   private renderNodeCell(td: HTMLElement, node: NodeData, depth: number): void {
-    td.draggable = true;
+    td.draggable = !this.selectMode;
     td.dataset.nodeId = node.id;
     td.dataset.nodeType = node.type;
     td.style.paddingLeft = depth * 16 + 8 + "px";
+
+    if (this.selectMode && node.type === "chapter") {
+      const cb = td.createEl("input", { type: "checkbox" });
+      cb.addClass("chs-select-cb");
+      cb.checked = this.selectedChapterIds.has(node.id);
+      cb.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleSelect(node.id);
+      });
+    }
 
     if (node.type !== "chapter") {
       const toggle = td.createSpan("chs-toggle");
@@ -716,7 +768,7 @@ export class ChaiShuMatrixView extends ItemView {
 
     const summaryEl = t.closest("[data-summary-id]") as HTMLElement | null;
     if (summaryEl) {
-      void this.openSummaryModal(summaryEl.dataset.summaryId as string);
+      void this.openSummaryNote(summaryEl.dataset.summaryId as string);
       return;
     }
 
@@ -744,6 +796,16 @@ export class ChaiShuMatrixView extends ItemView {
     const dimEl = t.closest("[data-dim-id]") as HTMLElement | null;
     if (dimEl) {
       this.openEditDimension(dimEl.dataset.dimId as string);
+      return;
+    }
+
+    if (this.selectMode) {
+      const nodeEl = t.closest("[data-node-id]") as HTMLElement | null;
+      if (nodeEl && nodeEl.dataset.nodeType === "chapter") {
+        const cb = nodeEl.querySelector(".chs-select-cb") as HTMLInputElement | null;
+        if (cb) cb.checked = !cb.checked;
+        this.toggleSelect(nodeEl.dataset.nodeId as string);
+      }
       return;
     }
   }
@@ -777,29 +839,16 @@ export class ChaiShuMatrixView extends ItemView {
       this.app.vault.getAbstractFileByPath(cell.filePath) instanceof TFile;
 
     const menu = new Menu();
+    menu.addItem((i) =>
+      i
+        .setTitle("打开笔记")
+        .setIcon("external-link")
+        .onClick(() => void this.openCellNote(key, chapterId, dimId))
+    );
     if (fileExists) {
-      menu.addItem((i) =>
-        i
-          .setTitle("在编辑器中打开")
-          .setIcon("external-link")
-          .onClick(() => void this.openInEditor(cell.filePath))
-      );
-      menu.addItem((i) =>
-        i
-          .setTitle("编辑内容")
-          .setIcon("pencil")
-          .onClick(() => void this.openCellEditor(key, chapterId, dimId))
-      );
       menu.addSeparator();
       menu.addItem((i) =>
         i.setTitle("删除笔记").setIcon("trash").onClick(() => this.deleteCellNote(key, cell))
-      );
-    } else {
-      menu.addItem((i) =>
-        i
-          .setTitle("写入内容")
-          .setIcon("plus")
-          .onClick(() => void this.openCellEditor(key, chapterId, dimId))
       );
     }
     const rect = cellEl.getBoundingClientRect();
@@ -807,17 +856,28 @@ export class ChaiShuMatrixView extends ItemView {
   }
 
   private onCellClick(key: string, chapterId: string, dimId: string): void {
+    void this.openCellNote(key, chapterId, dimId);
+  }
+
+  /** V1.5: always open the cell note in the main editor (never inline). */
+  private async openCellNote(key: string, chapterId: string, dimId: string): Promise<void> {
     const book = this.book;
     if (!book) return;
-    const cell = book.cells[key];
-    const fileExists =
-      !!cell?.filePath &&
-      this.app.vault.getAbstractFileByPath(cell.filePath) instanceof TFile;
-    if (fileExists) {
-      void this.openInEditor(cell.filePath);
-    } else {
-      void this.openCellEditor(key, chapterId, dimId);
+    const dim = book.dimensions.find((d) => d.id === dimId);
+    const chapter = findNode(book.structure, chapterId);
+    if (!dim || !chapter) return;
+    const cell = book.cells[key] ?? (book.cells[key] = { filePath: "", hasContent: false });
+    let file = cell.filePath
+      ? this.app.vault.getAbstractFileByPath(cell.filePath)
+      : null;
+    if (!(file instanceof TFile)) {
+      file = await createChapterNote(this.app.vault, book, chapterId, dim, "");
+      cell.filePath = file.path;
+      cell.hasContent = false;
+      await this.plugin.saveSettings();
+      this.renderMatrix();
     }
+    await this.openInEditor(file.path);
   }
 
   private openEmotionEditor(chapterId: string): void {
@@ -843,94 +903,39 @@ export class ChaiShuMatrixView extends ItemView {
     }).open();
   }
 
-  private async openCellEditor(key: string, chapterId: string, dimId: string): Promise<void> {
-    const book = this.book;
-    if (!book) return;
-    const dim = book.dimensions.find((d) => d.id === dimId);
-    const chapterNode = findNode(book.structure, chapterId);
-    if (!dim || !chapterNode) return;
-
-    let initialBody = "";
-    const cell = book.cells[key];
-    if (cell?.filePath) {
-      const f = this.app.vault.getAbstractFileByPath(cell.filePath);
-      if (f instanceof TFile) {
-        try {
-          initialBody = stripFrontmatter(await this.app.vault.cachedRead(f));
-        } catch (e) {
-          /* ignore */
-        }
-      }
-    }
-
-    new CellEditModal(this.app, {
-      title: chapterNode.name + " · " + dim.name,
-      initialBody,
-      onSave: async (body) => {
-        const file = await createChapterNote(this.app.vault, book, chapterId, dim, body);
-        const c =
-          book.cells[key] ?? (book.cells[key] = { filePath: "", hasContent: false });
-        c.filePath = file.path;
-        c.hasContent = true;
-        await this.plugin.saveSettings();
-        this.renderMatrix();
-      },
-    }).open();
-  }
-
-  private async openSummaryModal(nodeId: string): Promise<void> {
+  /** V1.5: open a volume/unit summary note in the main editor (never inline). */
+  private async openSummaryNote(nodeId: string): Promise<void> {
     const book = this.book;
     if (!book) return;
     const node = findNode(book.structure, nodeId);
     if (!node || node.type === "chapter") return;
 
-    let initialBody = "";
-    if (node.summaryFile) {
-      const f = this.app.vault.getAbstractFileByPath(node.summaryFile);
-      if (f instanceof TFile) {
-        try {
-          initialBody = stripFrontmatter(await this.app.vault.cachedRead(f));
-        } catch (e) {
-          /* ignore */
-        }
-      }
+    let file = node.summaryFile
+      ? this.app.vault.getAbstractFileByPath(node.summaryFile)
+      : null;
+    if (!(file instanceof TFile)) {
+      file = await createSummaryNote(this.app.vault, book, nodeId, "");
+      node.summaryFile = file.path;
+      node.summaryHasContent = false;
+      await this.plugin.saveSettings();
+      this.renderMatrix();
     }
-
-    new SummaryModal(this.app, {
-      title: (node.type === "volume" ? "卷总结 · " : "单元总结 · ") + node.name,
-      initialBody,
-      onSave: async (body) => {
-        if (!body.trim()) {
-          if (node.summaryFile) {
-            const f = this.app.vault.getAbstractFileByPath(node.summaryFile);
-            if (f instanceof TFile) {
-              try {
-                await this.app.vault.delete(f);
-              } catch (e) {
-                /* ignore */
-              }
-            }
-          }
-          node.summaryFile = "";
-          node.summaryHasContent = false;
-        } else {
-          const file = await createSummaryNote(this.app.vault, book, nodeId, body);
-          node.summaryFile = file.path;
-          node.summaryHasContent = true;
-        }
-        await this.plugin.saveSettings();
-        this.renderMatrix();
-      },
-    }).open();
+    await this.openInEditor(file.path);
   }
 
   private async openInEditor(filePath: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (file instanceof TFile) {
-      await this.app.workspace.getLeaf(false).openFile(file);
-    } else {
+    if (!(file instanceof TFile)) {
       new Notice("笔记不存在：" + filePath);
+      return;
     }
+    // Open in the user's current area, but never clobber the matrix tab itself.
+    const leaf =
+      this.app.workspace.activeLeaf === this.leaf
+        ? this.app.workspace.getLeaf("tab")
+        : this.app.workspace.getLeaf(false);
+    await leaf.openFile(file);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
   }
 
   private deleteCellNote(key: string, cell: CellData): void {
@@ -1015,6 +1020,89 @@ export class ChaiShuMatrixView extends ItemView {
     this.renderMatrix();
   }
 
+  /** Natural-sort the chapter siblings of the node's parent (reorder only). */
+  private smartSort(nodeId: string): void {
+    const book = this.book;
+    if (!book) return;
+    const arr = findParentArray(book.structure, nodeId);
+    if (!arr) return;
+    sortChapterSiblings(arr);
+    void this.plugin.saveSettings();
+    this.renderMatrix();
+  }
+
+  // --------------------------------------------------------- multi-select
+
+  private setSelectMode(on: boolean): void {
+    this.selectMode = on;
+    if (!on) this.selectedChapterIds.clear();
+    this.renderSelectBar();
+    this.renderMatrix();
+  }
+
+  private toggleSelect(id: string): void {
+    if (this.selectedChapterIds.has(id)) this.selectedChapterIds.delete(id);
+    else this.selectedChapterIds.add(id);
+    this.renderSelectBar();
+  }
+
+  private renderSelectBar(): void {
+    if (!this.selectBarEl) return;
+    this.selectBarEl.empty();
+    this.selectBarEl.toggleClass("is-visible", this.selectMode);
+    if (!this.selectMode) return;
+
+    this.selectCountEl = this.selectBarEl.createSpan("chs-select-count");
+    this.selectCountEl.setText("已选 " + this.selectedChapterIds.size + " 章");
+
+    const collectBtn = this.selectBarEl.createEl("button", {
+      text: "＋ 收纳为单元",
+      cls: "chs-btn chs-btn-primary chs-btn-sm",
+    });
+    collectBtn.addEventListener("click", () => void this.collectToUnit());
+
+    const doneBtn = this.selectBarEl.createEl("button", {
+      text: "完成",
+      cls: "chs-btn chs-btn-sm",
+    });
+    doneBtn.addEventListener("click", () => this.setSelectMode(false));
+  }
+
+  private collectToUnit(): void {
+    const book = this.book;
+    if (!book) return;
+    if (this.selectedChapterIds.size === 0) {
+      new Notice("请先勾选要收纳的章节");
+      return;
+    }
+    const idx = collectUnits(book.structure).length + 1;
+    new PromptModal(this.app, {
+      title: "收纳为单元",
+      placeholder: "新单元名称",
+      initial: "第" + idx + "单元",
+      confirmText: "创建并收纳",
+      onConfirm: (name) => void this.doCollectToUnit(name),
+    }).open();
+  }
+
+  private async doCollectToUnit(name: string): Promise<void> {
+    const book = this.book;
+    if (!book) return;
+    const unit = createNode("unit", sanitizeFileName(name) || "未命名单元");
+    const ordered = collectChapters(book.structure).filter((c) =>
+      this.selectedChapterIds.has(c.id)
+    );
+    for (const c of ordered) removeNode(book.structure, c.id);
+    unit.children = ordered;
+    book.structure.push(unit);
+    await this.syncNodeFiles(unit);
+    this.selectedChapterIds.clear();
+    this.selectMode = false;
+    this.renderSelectBar();
+    await this.plugin.saveSettings();
+    this.render();
+  }
+
   private deleteNode(nodeId: string): void {
     const book = this.book;
     if (!book) return;
@@ -1057,7 +1145,7 @@ export class ChaiShuMatrixView extends ItemView {
         i
           .setTitle("编辑" + (node.type === "volume" ? "卷总结" : "单元总结"))
           .setIcon("pencil")
-          .onClick(() => void this.openSummaryModal(nodeId))
+          .onClick(() => void this.openSummaryNote(nodeId))
       );
     }
     if (node.type === "chapter") {
@@ -1073,6 +1161,9 @@ export class ChaiShuMatrixView extends ItemView {
     );
     menu.addItem((i) =>
       i.setTitle("下移").setIcon("arrow-down").onClick(() => this.moveNodeRelative(nodeId, 1))
+    );
+    menu.addItem((i) =>
+      i.setTitle("智能排序").setIcon("list-ordered").onClick(() => this.smartSort(nodeId))
     );
     menu.addSeparator();
     menu.addItem((i) =>
@@ -1137,7 +1228,18 @@ export class ChaiShuMatrixView extends ItemView {
     if (!targetId || this.canDropOnto(this.dragNodeId, targetId)) {
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-      this.setDragHighlight(targetId);
+    }
+    // Throttle highlight updates to one per animation frame (reduces drag jank).
+    if (this.dragRafId === null) {
+      this.dragRafId = requestAnimationFrame(() => {
+        this.dragRafId = null;
+        if (!this.dragNodeId) return;
+        if (!targetId || this.canDropOnto(this.dragNodeId, targetId)) {
+          this.setDragHighlight(targetId);
+        } else {
+          this.setDragHighlight(null);
+        }
+      });
     }
   }
 
@@ -1153,6 +1255,10 @@ export class ChaiShuMatrixView extends ItemView {
   private onDragEnd(): void {
     this.dragNodeId = null;
     this.dragOverTargetId = null;
+    if (this.dragRafId !== null) {
+      cancelAnimationFrame(this.dragRafId);
+      this.dragRafId = null;
+    }
     this.matrixEl?.querySelectorAll(".chs-drop-target").forEach((el) => el.removeClass("chs-drop-target"));
     this.matrixEl?.querySelectorAll(".chs-drop-root").forEach((el) => el.removeClass("chs-drop-root"));
     this.matrixEl?.querySelectorAll(".is-dragging").forEach((el) => el.removeClass("is-dragging"));
@@ -1230,6 +1336,9 @@ export class ChaiShuMatrixView extends ItemView {
     if (oldArr === drop.arr && oldIndex !== -1 && oldIndex < drop.index) index -= 1;
     index = Math.max(0, Math.min(index, drop.arr.length));
     drop.arr.splice(index, 0, dragged);
+
+    // V1.5: after a chapter is moved, natural-sort its new siblings (reorder only).
+    if (dragged.type === "chapter") sortChapterSiblings(drop.arr);
 
     await this.syncNodeFiles(dragged);
     await this.plugin.saveSettings();

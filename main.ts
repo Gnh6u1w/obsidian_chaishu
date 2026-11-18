@@ -56,6 +56,19 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "return-matrix",
+      name: "返回拆书矩阵",
+      callback: () => {
+        void this.activateView();
+      },
+    });
+
+    // In-note return link: [🔙 返回拆书矩阵](obsidian://chaishu-matrix-pro)
+    this.registerObsidianProtocolHandler("chaishu-matrix-pro", () => {
+      void this.activateView();
+    });
+
     this.addSettingTab(new ChaiShuSettingTab(this.app, this));
 
     this.registerEvent(

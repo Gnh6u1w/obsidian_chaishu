@@ -40,6 +40,7 @@ var DEFAULT_SETTINGS = {
   defaultDimensionNames: "\u60C5\u7EEA,\u957F\u671F\u671F\u5F85,\u4E2D\u671F\u671F\u5F85,\u51B2\u7A81",
   defaultStoragePath: "",
   activeBookId: "",
+  outlineCollapsed: false,
   books: []
 };
 var EMOTION_LEVELS = 5;
@@ -102,13 +103,148 @@ function yamlString(s) {
   }
   return str;
 }
+var RETURN_MARKER = "<!-- chs-return -->";
+var RETURN_LINK_MD = "[\u{1F519} \u8FD4\u56DE\u62C6\u4E66\u77E9\u9635](obsidian://chaishu-matrix-pro)";
+var RETURN_FOOTER = "\n\n---\n\n" + RETURN_MARKER + "\n" + RETURN_LINK_MD + "\n";
+function stripReturnFooter(body) {
+  const idx = body.indexOf(RETURN_MARKER);
+  return (idx === -1 ? body : body.slice(0, idx)).replace(/\s+$/, "");
+}
 function stripFrontmatter(content) {
-  if (!content.startsWith("---")) return content;
-  const firstEnd = content.indexOf("\n---", 3);
-  if (firstEnd === -1) return content;
-  const after = content.indexOf("\n", firstEnd + 4);
-  if (after === -1) return "";
-  return content.slice(after + 1);
+  let body = content;
+  if (content.startsWith("---")) {
+    const firstEnd = content.indexOf("\n---", 3);
+    if (firstEnd !== -1) {
+      const after = content.indexOf("\n", firstEnd + 4);
+      body = after === -1 ? "" : content.slice(after + 1);
+    }
+  }
+  return stripReturnFooter(body);
+}
+var CN_DIGITS = {
+  \u96F6: 0,
+  \u4E00: 1,
+  \u4E8C: 2,
+  \u4E24: 2,
+  \u4E09: 3,
+  \u56DB: 4,
+  \u4E94: 5,
+  \u516D: 6,
+  \u4E03: 7,
+  \u516B: 8,
+  \u4E5D: 9
+};
+var EN_NUM = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90
+};
+function parseChineseNum(s) {
+  let total = 0;
+  let section = 0;
+  let num = 0;
+  let any = false;
+  for (const ch of s) {
+    if (ch in CN_DIGITS) {
+      num = CN_DIGITS[ch];
+      any = true;
+    } else if (ch === "\u5341") {
+      section += (num || 1) * 10;
+      num = 0;
+      any = true;
+    } else if (ch === "\u767E") {
+      section += (num || 1) * 100;
+      num = 0;
+      any = true;
+    } else if (ch === "\u5343") {
+      section += (num || 1) * 1e3;
+      num = 0;
+      any = true;
+    } else if (ch === "\u4E07") {
+      section = (section + num) * 1e4;
+      total += section;
+      section = 0;
+      num = 0;
+      any = true;
+    } else {
+      return null;
+    }
+  }
+  return any ? total + section + num : null;
+}
+function tokenize(s) {
+  const tokens = [];
+  const re = /(\d+)|([零一二两三四五六七八九十百千万]+)|([A-Za-z]+)/g;
+  let m;
+  let last = 0;
+  while (m = re.exec(s)) {
+    if (m.index > last) tokens.push(s.slice(last, m.index));
+    if (m[1] !== void 0) {
+      tokens.push(parseInt(m[1], 10));
+    } else if (m[2] !== void 0) {
+      const cn = parseChineseNum(m[2]);
+      tokens.push(cn != null ? cn : m[2]);
+    } else if (m[3] !== void 0) {
+      const en = EN_NUM[m[3].toLowerCase()];
+      tokens.push(en != null ? en : m[3]);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) tokens.push(s.slice(last));
+  return tokens;
+}
+function naturalCompare(a, b) {
+  const ta = tokenize(String(a));
+  const tb = tokenize(String(b));
+  const n = Math.max(ta.length, tb.length);
+  for (let i = 0; i < n; i++) {
+    const x = ta[i];
+    const y = tb[i];
+    if (x === void 0) return -1;
+    if (y === void 0) return 1;
+    if (typeof x === "number" && typeof y === "number") {
+      if (x !== y) return x - y;
+    } else {
+      const c = String(x).localeCompare(String(y), "zh-Hans-CN", { numeric: true, sensitivity: "base" });
+      if (c !== 0) return c;
+    }
+  }
+  return 0;
+}
+function sortChapterSiblings(arr) {
+  const idxs = [];
+  arr.forEach((n, i) => {
+    if (n.type === "chapter") idxs.push(i);
+  });
+  const chapters = idxs.map((i) => arr[i]).sort((a, b) => naturalCompare(a.name, b.name));
+  idxs.forEach((idx, k) => {
+    arr[idx] = chapters[k];
+  });
 }
 function createNode(type, name, children = []) {
   return {
@@ -242,16 +378,15 @@ function buildChapterContent(book, chapterId, dimension, body) {
   const ctx = findNodeContext(book.structure, chapterId);
   const lines = [
     "---",
-    "type: " + yamlString("\u62C6\u4E66\u77E9\u9635"),
-    "book: " + yamlString(bookFolderName(book.bookInfo.title))
+    "\u62C6\u4E66\u9879\u76EE: " + yamlString(bookFolderName(book.bookInfo.title))
   ];
-  if (ctx == null ? void 0 : ctx.volume) lines.push("volume: " + yamlString(ctx.volume.name));
-  if (ctx == null ? void 0 : ctx.unit) lines.push("unit: " + yamlString(ctx.unit.name));
-  lines.push("chapter: " + yamlString(ctx ? ctx.node.name : "\u7AE0\u8282"));
-  lines.push("dimension: " + yamlString(dimension.name));
+  if (ctx == null ? void 0 : ctx.volume) lines.push("\u6240\u5C5E\u5377: " + yamlString(ctx.volume.name));
+  if (ctx == null ? void 0 : ctx.unit) lines.push("\u6240\u5C5E\u5355\u5143: " + yamlString(ctx.unit.name));
+  lines.push("\u7AE0\u8282\u540D\u79F0: " + yamlString(ctx ? ctx.node.name : "\u7AE0\u8282"));
+  lines.push("\u5206\u6790\u7EF4\u5EA6: " + yamlString(dimension.name));
   lines.push("---", "");
-  const normalizedBody = body ? body.replace(/\r\n/g, "\n") : "";
-  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "");
+  const normalizedBody = stripReturnFooter(body ? body.replace(/\r\n/g, "\n") : "");
+  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "") + RETURN_FOOTER;
 }
 function buildSummaryContent(book, nodeId, body) {
   const ctx = findNodeContext(book.structure, nodeId);
@@ -265,10 +400,10 @@ function buildSummaryContent(book, nodeId, body) {
     if (ctx == null ? void 0 : ctx.volume) lines.push("\u6240\u5C5E\u5377: " + yamlString(ctx.volume.name));
     lines.push("\u5355\u5143\u540D: " + yamlString(node.name));
   }
-  lines.push("\u4E66\u540D: " + yamlString(bookFolderName(book.bookInfo.title)));
+  lines.push("\u62C6\u4E66\u9879\u76EE: " + yamlString(bookFolderName(book.bookInfo.title)));
   lines.push("---", "");
-  const normalizedBody = body ? body.replace(/\r\n/g, "\n") : "";
-  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "");
+  const normalizedBody = stripReturnFooter(body ? body.replace(/\r\n/g, "\n") : "");
+  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "") + RETURN_FOOTER;
 }
 async function ensureFolder(vault, path) {
   const normalized = (0, import_obsidian.normalizePath)(path);
@@ -327,11 +462,46 @@ var EMO_PAD_TOP = 16;
 var EMO_PAD_BOTTOM = 30;
 var EMO_HEIGHT = 250;
 var EMO_PLOT_W = 520;
+var emoClipSeq = 0;
 function makeSvgEl(tag, attrs) {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
   return el;
 }
+var PromptModal = class extends import_obsidian2.Modal {
+  constructor(app, opts) {
+    var _a;
+    super(app);
+    this.opts = opts;
+    this.value = "";
+    this.value = (_a = opts.initial) != null ? _a : "";
+  }
+  onOpen() {
+    var _a, _b;
+    this.contentEl.addClass("chs-modal");
+    this.contentEl.createEl("h2", { text: this.opts.title });
+    const input = this.contentEl.createEl("input", { type: "text", cls: "chs-input" });
+    input.value = this.value;
+    input.placeholder = (_a = this.opts.placeholder) != null ? _a : "";
+    input.addEventListener("input", () => this.value = input.value);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        this.opts.onConfirm(this.value);
+        this.close();
+      }
+    });
+    const footer = this.contentEl.createDiv("chs-modal-actions");
+    new import_obsidian2.ButtonComponent(footer).setButtonText("\u53D6\u6D88").onClick(() => this.close());
+    new import_obsidian2.ButtonComponent(footer).setButtonText((_b = this.opts.confirmText) != null ? _b : "\u786E\u5B9A").setCta().onClick(() => {
+      this.opts.onConfirm(this.value);
+      this.close();
+    });
+    setTimeout(() => input.focus(), 0);
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 var BookCreateModal = class extends import_obsidian2.Modal {
   constructor(app, onSubmit) {
     super(app);
@@ -445,68 +615,6 @@ var DimensionModal = class extends import_obsidian2.Modal {
     }
     this.close();
     this.opts.onSave(name, this.color || DIMENSION_COLORS[0], this.isChart, this.yAxisLabels);
-  }
-  onClose() {
-    this.contentEl.empty();
-  }
-};
-var CellEditModal = class extends import_obsidian2.Modal {
-  constructor(app, opts) {
-    super(app);
-    this.opts = opts;
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("chs-modal", "chs-cell-modal");
-    contentEl.createEl("h2", { text: this.opts.title });
-    this.textarea = new import_obsidian2.TextAreaComponent(contentEl);
-    this.textarea.setValue(this.opts.initialBody);
-    this.textarea.inputEl.addClass("chs-textarea");
-    this.textarea.inputEl.rows = 10;
-    this.textarea.inputEl.setAttribute(
-      "placeholder",
-      "\u5728\u6B64\u8F93\u5165\u5185\u5BB9\u2026\n\u652F\u6301\u591A\u884C\u6587\u672C\uFF0C\u4FDD\u5B58\u540E\u81EA\u52A8\u5F52\u6863\u4E3A\u7B14\u8BB0"
-    );
-    const footer = contentEl.createDiv("chs-modal-actions");
-    new import_obsidian2.ButtonComponent(footer).setButtonText("\u53D6\u6D88").onClick(() => this.close());
-    new import_obsidian2.ButtonComponent(footer).setButtonText("\u4FDD\u5B58").setCta().onClick(async () => {
-      const body = this.textarea.getValue();
-      if (!body.trim()) {
-        new import_obsidian2.Notice("\u5185\u5BB9\u4E3A\u7A7A\uFF0C\u672A\u4FDD\u5B58");
-        return;
-      }
-      await this.opts.onSave(body);
-      this.close();
-    });
-    window.setTimeout(() => this.textarea.inputEl.focus(), 60);
-  }
-  onClose() {
-    this.contentEl.empty();
-  }
-};
-var SummaryModal = class extends import_obsidian2.Modal {
-  constructor(app, opts) {
-    super(app);
-    this.opts = opts;
-  }
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("chs-modal", "chs-cell-modal");
-    contentEl.createEl("h2", { text: this.opts.title });
-    this.textarea = new import_obsidian2.TextAreaComponent(contentEl);
-    this.textarea.setValue(this.opts.initialBody);
-    this.textarea.inputEl.addClass("chs-textarea");
-    this.textarea.inputEl.rows = 8;
-    this.textarea.inputEl.setAttribute("placeholder", "\u5728\u6B64\u8F93\u5165\u603B\u7ED3\u5185\u5BB9\u2026\uFF08\u7559\u7A7A\u4FDD\u5B58\u5C06\u5220\u9664\u8BE5\u603B\u7ED3\uFF09");
-    const footer = contentEl.createDiv("chs-modal-actions");
-    new import_obsidian2.ButtonComponent(footer).setButtonText("\u53D6\u6D88").onClick(() => this.close());
-    new import_obsidian2.ButtonComponent(footer).setButtonText("\u4FDD\u5B58").setCta().onClick(async () => {
-      await this.opts.onSave(this.textarea.getValue());
-      this.close();
-    });
-    window.setTimeout(() => this.textarea.inputEl.focus(), 60);
   }
   onClose() {
     this.contentEl.empty();
@@ -811,6 +919,11 @@ var EmotionEditorModal = class extends import_obsidian2.Modal {
     this.eraser = false;
     this.dragging = false;
     this.dragIndex = -1;
+    // Tap-vs-drag disambiguation + rAF throttle (mobile anti-mistouch).
+    this.pending = false;
+    this.downX = 0;
+    this.downY = 0;
+    this.rafId = null;
     this.data = (opts.initial && opts.initial.length ? opts.initial : [3, 3, 3, 3, 3]).slice();
   }
   onOpen() {
@@ -822,7 +935,7 @@ var EmotionEditorModal = class extends import_obsidian2.Modal {
   }
   xPx(i) {
     const n = this.data.length;
-    if (n <= 1) return EMO_PAD_LEFT + EMO_PLOT_W / 2;
+    if (n <= 1) return EMO_PAD_LEFT;
     return EMO_PAD_LEFT + i / (n - 1) * EMO_PLOT_W;
   }
   render() {
@@ -912,6 +1025,20 @@ var EmotionEditorModal = class extends import_obsidian2.Modal {
     xAxis.style.stroke = "var(--background-modifier-border)";
     xAxis.setAttribute("stroke-width", "1");
     svg.appendChild(xAxis);
+    const clipId = "chs-emo-clip-" + emoClipSeq++;
+    const defs = makeSvgEl("defs", {});
+    const clip = makeSvgEl("clipPath", {});
+    clip.setAttribute("id", clipId);
+    clip.appendChild(
+      makeSvgEl("rect", {
+        x: String(EMO_PAD_LEFT),
+        y: String(EMO_PAD_TOP),
+        width: String(EMO_PLOT_W),
+        height: String(plotH)
+      })
+    );
+    defs.appendChild(clip);
+    svg.appendChild(defs);
     const poly = makeSvgEl("polyline", {
       points: "",
       fill: "none",
@@ -920,59 +1047,101 @@ var EmotionEditorModal = class extends import_obsidian2.Modal {
       "stroke-linecap": "round"
     });
     poly.setAttribute("stroke", this.opts.color);
+    poly.setAttribute("clip-path", "url(#" + clipId + ")");
     svg.appendChild(poly);
     this.polyEl = poly;
     const pointsG = makeSvgEl("g", {});
+    pointsG.setAttribute("clip-path", "url(#" + clipId + ")");
     svg.appendChild(pointsG);
     this.pointsEl = pointsG;
     svg.addEventListener("pointerdown", (e) => {
       e.preventDefault();
-      this.onPointer(e, true);
+      this.onPointerDown(e);
     });
     svg.addEventListener("pointermove", (e) => {
-      if (this.dragging) this.onPointer(e, false);
+      if (this.pending || this.dragging) this.onPointerMove(e);
     });
-    const stop = () => {
-      this.dragging = false;
-      this.dragIndex = -1;
-    };
-    svg.addEventListener("pointerup", stop);
-    svg.addEventListener("pointerleave", stop);
+    const finish = () => this.onPointerUp();
+    svg.addEventListener("pointerup", finish);
+    svg.addEventListener("pointercancel", finish);
+    svg.addEventListener("pointerleave", finish);
     scroll.appendChild(svg);
     this.svgEl = svg;
     this.updateLine();
   }
-  onPointer(e, down) {
+  onPointerDown(e) {
+    const svg = this.svgEl;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    this.downX = e.clientX - rect.left;
+    this.downY = e.clientY - rect.top;
+    this.pending = true;
+    this.dragging = false;
+    this.dragIndex = this.nearestPoint(this.downX, this.downY);
+  }
+  onPointerMove(e) {
     const svg = this.svgEl;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
-    const level = this.levelAt(py);
-    if (down) {
-      this.dragging = true;
-      const idx = this.nearestPoint(px, py);
-      if (idx !== -1) {
-        if (this.eraser) {
-          this.data.splice(idx, 1);
-          this.dragging = false;
-          this.render();
-          return;
-        }
-        this.dragIndex = idx;
-        this.data[idx] = level;
-      } else if (!this.eraser) {
-        const n = this.data.length;
-        const rel = Math.max(0, Math.min(1, (px - EMO_PAD_LEFT) / EMO_PLOT_W));
-        const insertAt = n === 0 ? 0 : Math.max(0, Math.min(n, Math.round(rel * n)));
-        this.data.splice(insertAt, 0, level);
-        this.dragIndex = insertAt;
-      } else {
+    if (this.pending) {
+      const dx = px - this.downX;
+      const dy = py - this.downY;
+      if (dx * dx + dy * dy < 36) return;
+      this.pending = false;
+      if (this.eraser) {
         this.dragging = false;
+        return;
+      }
+      if (this.dragIndex !== -1) {
+        this.dragging = true;
+      } else {
+        this.dragIndex = this.insertAt(this.downX);
+        this.data.splice(this.dragIndex, 0, this.levelAt(this.downY));
+        this.dragging = true;
       }
     }
     if (this.dragging && this.dragIndex >= 0 && this.dragIndex < this.data.length) {
-      this.data[this.dragIndex] = level;
+      this.data[this.dragIndex] = this.levelAt(py);
+    }
+    this.scheduleUpdate();
+  }
+  onPointerUp() {
+    if (this.pending) {
+      this.pending = false;
+      if (this.eraser) {
+        if (this.dragIndex !== -1) {
+          this.data.splice(this.dragIndex, 1);
+          this.dragIndex = -1;
+          this.render();
+        }
+      } else if (this.dragIndex === -1) {
+        const insertAt = this.insertAt(this.downX);
+        this.data.splice(insertAt, 0, this.levelAt(this.downY));
+      }
+    }
+    this.dragging = false;
+    this.dragIndex = -1;
+    this.flushUpdate();
+  }
+  insertAt(px) {
+    const n = this.data.length;
+    if (n === 0) return 0;
+    const rel = Math.max(0, Math.min(1, (px - EMO_PAD_LEFT) / EMO_PLOT_W));
+    return Math.max(0, Math.min(n, Math.round(rel * n)));
+  }
+  scheduleUpdate() {
+    if (this.rafId !== null) return;
+    this.rafId = requestAnimationFrame(() => {
+      this.rafId = null;
+      this.updateLine();
+    });
+  }
+  flushUpdate() {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
     }
     this.updateLine();
   }
@@ -1008,6 +1177,10 @@ var EmotionEditorModal = class extends import_obsidian2.Modal {
     }
   }
   onClose() {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
     this.contentEl.empty();
   }
 };
@@ -1100,6 +1273,10 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     // Drag state
     this.dragNodeId = null;
     this.dragOverTargetId = null;
+    this.dragRafId = null;
+    // Multi-select (quick collection) state
+    this.selectMode = false;
+    this.selectedChapterIds = /* @__PURE__ */ new Set();
     this.plugin = plugin;
   }
   getViewType() {
@@ -1139,6 +1316,8 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     this.observer = null;
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     this.saveTimer = null;
+    if (this.dragRafId !== null) cancelAnimationFrame(this.dragRafId);
+    this.dragRafId = null;
     this.plugin.views.delete(this);
     this.contentEl.empty();
   }
@@ -1309,7 +1488,11 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     addUnit.addEventListener("click", () => this.addUnit());
     const importBtn = mid.createEl("button", { text: "\u{1F4E5} \u5BFC\u5165", cls: "chs-btn" });
     importBtn.addEventListener("click", () => this.openImportModal());
+    const multiBtn = mid.createEl("button", { text: "\u2611 \u591A\u9009", cls: "chs-btn" });
+    multiBtn.addEventListener("click", () => this.setSelectMode(!this.selectMode));
     this.statsEl = tb.createDiv("chs-stats");
+    this.selectBarEl = this.wrapEl.createDiv("chs-selectbar");
+    this.renderSelectBar();
   }
   readAddCount(input) {
     const n = parseInt(input.value, 10);
@@ -1360,10 +1543,21 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     const book = this.book;
     const table = this.matrixEl;
     table.empty();
+    const colgroup = table.createEl("colgroup");
+    const nodeCol = colgroup.createEl("col");
+    nodeCol.style.width = "var(--chs-node-w, 200px)";
+    for (const dim of book.dimensions) {
+      const c = colgroup.createEl("col");
+      c.style.width = "var(--chs-col-w, 150px)";
+    }
+    const fillerCol = colgroup.createEl("col");
+    fillerCol.style.width = "var(--chs-col-w, 150px)";
+    const collapsed = this.settings.outlineCollapsed;
+    table.toggleClass("chs-outline-collapsed", collapsed);
     const thead = table.createEl("thead");
     const headRow = thead.createEl("tr");
     const corner = headRow.createEl("th", { cls: "chs-corner" });
-    corner.setText("\u5927\u7EB2 / \u7AE0\u8282");
+    this.renderCorner(corner, collapsed);
     for (const dim of book.dimensions) {
       const th = headRow.createEl("th", { cls: "chs-dim-head" });
       th.dataset.dimId = dim.id;
@@ -1392,6 +1586,19 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     for (let i = 0; i < book.dimensions.length + 1; i++) {
       addTr.createEl("td", { cls: "chs-cell-filler" });
     }
+  }
+  renderCorner(corner, collapsed) {
+    const btn = corner.createEl("button", { cls: "chs-outline-toggle" });
+    btn.setAttribute("aria-label", collapsed ? "\u5C55\u5F00\u5927\u7EB2" : "\u6536\u8D77\u5927\u7EB2");
+    (0, import_obsidian3.setIcon)(btn, collapsed ? "chevron-right" : "chevron-left");
+    if (!collapsed) {
+      corner.createSpan("chs-corner-label").setText("\u5927\u7EB2 / \u7AE0\u8282");
+    }
+    btn.addEventListener("click", () => {
+      this.settings.outlineCollapsed = !this.settings.outlineCollapsed;
+      void this.plugin.saveSettings();
+      this.renderMatrix();
+    });
   }
   renderNodeRow(tbody, node, depth) {
     const book = this.book;
@@ -1429,10 +1636,19 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
   }
   renderNodeCell(td, node, depth) {
     var _a;
-    td.draggable = true;
+    td.draggable = !this.selectMode;
     td.dataset.nodeId = node.id;
     td.dataset.nodeType = node.type;
     td.style.paddingLeft = depth * 16 + 8 + "px";
+    if (this.selectMode && node.type === "chapter") {
+      const cb = td.createEl("input", { type: "checkbox" });
+      cb.addClass("chs-select-cb");
+      cb.checked = this.selectedChapterIds.has(node.id);
+      cb.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.toggleSelect(node.id);
+      });
+    }
     if (node.type !== "chapter") {
       const toggle = td.createSpan("chs-toggle");
       toggle.setText(node.collapsed ? "\u25B6" : "\u25BC");
@@ -1613,7 +1829,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     }
     const summaryEl = t.closest("[data-summary-id]");
     if (summaryEl) {
-      void this.openSummaryModal(summaryEl.dataset.summaryId);
+      void this.openSummaryNote(summaryEl.dataset.summaryId);
       return;
     }
     const toggleEl = t.closest("[data-toggle-id]");
@@ -1637,6 +1853,15 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     const dimEl = t.closest("[data-dim-id]");
     if (dimEl) {
       this.openEditDimension(dimEl.dataset.dimId);
+      return;
+    }
+    if (this.selectMode) {
+      const nodeEl = t.closest("[data-node-id]");
+      if (nodeEl && nodeEl.dataset.nodeType === "chapter") {
+        const cb = nodeEl.querySelector(".chs-select-cb");
+        if (cb) cb.checked = !cb.checked;
+        this.toggleSelect(nodeEl.dataset.nodeId);
+      }
       return;
     }
   }
@@ -1665,35 +1890,39 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     const cell = book.cells[key];
     const fileExists = !!(cell == null ? void 0 : cell.filePath) && this.app.vault.getAbstractFileByPath(cell.filePath) instanceof import_obsidian3.TFile;
     const menu = new import_obsidian3.Menu();
+    menu.addItem(
+      (i) => i.setTitle("\u6253\u5F00\u7B14\u8BB0").setIcon("external-link").onClick(() => void this.openCellNote(key, chapterId, dimId))
+    );
     if (fileExists) {
-      menu.addItem(
-        (i) => i.setTitle("\u5728\u7F16\u8F91\u5668\u4E2D\u6253\u5F00").setIcon("external-link").onClick(() => void this.openInEditor(cell.filePath))
-      );
-      menu.addItem(
-        (i) => i.setTitle("\u7F16\u8F91\u5185\u5BB9").setIcon("pencil").onClick(() => void this.openCellEditor(key, chapterId, dimId))
-      );
       menu.addSeparator();
       menu.addItem(
         (i) => i.setTitle("\u5220\u9664\u7B14\u8BB0").setIcon("trash").onClick(() => this.deleteCellNote(key, cell))
-      );
-    } else {
-      menu.addItem(
-        (i) => i.setTitle("\u5199\u5165\u5185\u5BB9").setIcon("plus").onClick(() => void this.openCellEditor(key, chapterId, dimId))
       );
     }
     const rect = cellEl.getBoundingClientRect();
     menu.showAtPosition({ x: rect.left, y: rect.bottom });
   }
   onCellClick(key, chapterId, dimId) {
+    void this.openCellNote(key, chapterId, dimId);
+  }
+  /** V1.5: always open the cell note in the main editor (never inline). */
+  async openCellNote(key, chapterId, dimId) {
+    var _a;
     const book = this.book;
     if (!book) return;
-    const cell = book.cells[key];
-    const fileExists = !!(cell == null ? void 0 : cell.filePath) && this.app.vault.getAbstractFileByPath(cell.filePath) instanceof import_obsidian3.TFile;
-    if (fileExists) {
-      void this.openInEditor(cell.filePath);
-    } else {
-      void this.openCellEditor(key, chapterId, dimId);
+    const dim = book.dimensions.find((d) => d.id === dimId);
+    const chapter = findNode(book.structure, chapterId);
+    if (!dim || !chapter) return;
+    const cell = (_a = book.cells[key]) != null ? _a : book.cells[key] = { filePath: "", hasContent: false };
+    let file = cell.filePath ? this.app.vault.getAbstractFileByPath(cell.filePath) : null;
+    if (!(file instanceof import_obsidian3.TFile)) {
+      file = await createChapterNote(this.app.vault, book, chapterId, dim, "");
+      cell.filePath = file.path;
+      cell.hasContent = false;
+      await this.plugin.saveSettings();
+      this.renderMatrix();
     }
+    await this.openInEditor(file.path);
   }
   openEmotionEditor(chapterId) {
     var _a;
@@ -1718,85 +1947,31 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       }
     }).open();
   }
-  async openCellEditor(key, chapterId, dimId) {
-    const book = this.book;
-    if (!book) return;
-    const dim = book.dimensions.find((d) => d.id === dimId);
-    const chapterNode = findNode(book.structure, chapterId);
-    if (!dim || !chapterNode) return;
-    let initialBody = "";
-    const cell = book.cells[key];
-    if (cell == null ? void 0 : cell.filePath) {
-      const f = this.app.vault.getAbstractFileByPath(cell.filePath);
-      if (f instanceof import_obsidian3.TFile) {
-        try {
-          initialBody = stripFrontmatter(await this.app.vault.cachedRead(f));
-        } catch (e) {
-        }
-      }
-    }
-    new CellEditModal(this.app, {
-      title: chapterNode.name + " \xB7 " + dim.name,
-      initialBody,
-      onSave: async (body) => {
-        var _a;
-        const file = await createChapterNote(this.app.vault, book, chapterId, dim, body);
-        const c = (_a = book.cells[key]) != null ? _a : book.cells[key] = { filePath: "", hasContent: false };
-        c.filePath = file.path;
-        c.hasContent = true;
-        await this.plugin.saveSettings();
-        this.renderMatrix();
-      }
-    }).open();
-  }
-  async openSummaryModal(nodeId) {
+  /** V1.5: open a volume/unit summary note in the main editor (never inline). */
+  async openSummaryNote(nodeId) {
     const book = this.book;
     if (!book) return;
     const node = findNode(book.structure, nodeId);
     if (!node || node.type === "chapter") return;
-    let initialBody = "";
-    if (node.summaryFile) {
-      const f = this.app.vault.getAbstractFileByPath(node.summaryFile);
-      if (f instanceof import_obsidian3.TFile) {
-        try {
-          initialBody = stripFrontmatter(await this.app.vault.cachedRead(f));
-        } catch (e) {
-        }
-      }
+    let file = node.summaryFile ? this.app.vault.getAbstractFileByPath(node.summaryFile) : null;
+    if (!(file instanceof import_obsidian3.TFile)) {
+      file = await createSummaryNote(this.app.vault, book, nodeId, "");
+      node.summaryFile = file.path;
+      node.summaryHasContent = false;
+      await this.plugin.saveSettings();
+      this.renderMatrix();
     }
-    new SummaryModal(this.app, {
-      title: (node.type === "volume" ? "\u5377\u603B\u7ED3 \xB7 " : "\u5355\u5143\u603B\u7ED3 \xB7 ") + node.name,
-      initialBody,
-      onSave: async (body) => {
-        if (!body.trim()) {
-          if (node.summaryFile) {
-            const f = this.app.vault.getAbstractFileByPath(node.summaryFile);
-            if (f instanceof import_obsidian3.TFile) {
-              try {
-                await this.app.vault.delete(f);
-              } catch (e) {
-              }
-            }
-          }
-          node.summaryFile = "";
-          node.summaryHasContent = false;
-        } else {
-          const file = await createSummaryNote(this.app.vault, book, nodeId, body);
-          node.summaryFile = file.path;
-          node.summaryHasContent = true;
-        }
-        await this.plugin.saveSettings();
-        this.renderMatrix();
-      }
-    }).open();
+    await this.openInEditor(file.path);
   }
   async openInEditor(filePath) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
-    if (file instanceof import_obsidian3.TFile) {
-      await this.app.workspace.getLeaf(false).openFile(file);
-    } else {
+    if (!(file instanceof import_obsidian3.TFile)) {
       new import_obsidian3.Notice("\u7B14\u8BB0\u4E0D\u5B58\u5728\uFF1A" + filePath);
+      return;
     }
+    const leaf = this.app.workspace.activeLeaf === this.leaf ? this.app.workspace.getLeaf("tab") : this.app.workspace.getLeaf(false);
+    await leaf.openFile(file);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
   }
   deleteCellNote(key, cell) {
     new ConfirmModal(this.app, {
@@ -1870,6 +2045,79 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     void this.plugin.saveSettings();
     this.renderMatrix();
   }
+  /** Natural-sort the chapter siblings of the node's parent (reorder only). */
+  smartSort(nodeId) {
+    const book = this.book;
+    if (!book) return;
+    const arr = findParentArray(book.structure, nodeId);
+    if (!arr) return;
+    sortChapterSiblings(arr);
+    void this.plugin.saveSettings();
+    this.renderMatrix();
+  }
+  // --------------------------------------------------------- multi-select
+  setSelectMode(on) {
+    this.selectMode = on;
+    if (!on) this.selectedChapterIds.clear();
+    this.renderSelectBar();
+    this.renderMatrix();
+  }
+  toggleSelect(id) {
+    if (this.selectedChapterIds.has(id)) this.selectedChapterIds.delete(id);
+    else this.selectedChapterIds.add(id);
+    this.renderSelectBar();
+  }
+  renderSelectBar() {
+    if (!this.selectBarEl) return;
+    this.selectBarEl.empty();
+    this.selectBarEl.toggleClass("is-visible", this.selectMode);
+    if (!this.selectMode) return;
+    this.selectCountEl = this.selectBarEl.createSpan("chs-select-count");
+    this.selectCountEl.setText("\u5DF2\u9009 " + this.selectedChapterIds.size + " \u7AE0");
+    const collectBtn = this.selectBarEl.createEl("button", {
+      text: "\uFF0B \u6536\u7EB3\u4E3A\u5355\u5143",
+      cls: "chs-btn chs-btn-primary chs-btn-sm"
+    });
+    collectBtn.addEventListener("click", () => void this.collectToUnit());
+    const doneBtn = this.selectBarEl.createEl("button", {
+      text: "\u5B8C\u6210",
+      cls: "chs-btn chs-btn-sm"
+    });
+    doneBtn.addEventListener("click", () => this.setSelectMode(false));
+  }
+  collectToUnit() {
+    const book = this.book;
+    if (!book) return;
+    if (this.selectedChapterIds.size === 0) {
+      new import_obsidian3.Notice("\u8BF7\u5148\u52FE\u9009\u8981\u6536\u7EB3\u7684\u7AE0\u8282");
+      return;
+    }
+    const idx = collectUnits(book.structure).length + 1;
+    new PromptModal(this.app, {
+      title: "\u6536\u7EB3\u4E3A\u5355\u5143",
+      placeholder: "\u65B0\u5355\u5143\u540D\u79F0",
+      initial: "\u7B2C" + idx + "\u5355\u5143",
+      confirmText: "\u521B\u5EFA\u5E76\u6536\u7EB3",
+      onConfirm: (name) => void this.doCollectToUnit(name)
+    }).open();
+  }
+  async doCollectToUnit(name) {
+    const book = this.book;
+    if (!book) return;
+    const unit = createNode("unit", sanitizeFileName(name) || "\u672A\u547D\u540D\u5355\u5143");
+    const ordered = collectChapters(book.structure).filter(
+      (c) => this.selectedChapterIds.has(c.id)
+    );
+    for (const c of ordered) removeNode(book.structure, c.id);
+    unit.children = ordered;
+    book.structure.push(unit);
+    await this.syncNodeFiles(unit);
+    this.selectedChapterIds.clear();
+    this.selectMode = false;
+    this.renderSelectBar();
+    await this.plugin.saveSettings();
+    this.render();
+  }
   deleteNode(nodeId) {
     const book = this.book;
     if (!book) return;
@@ -1899,7 +2147,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
         (i) => i.setTitle(node.collapsed ? "\u5C55\u5F00" : "\u6298\u53E0").setIcon("chevrons-up-down").onClick(() => this.toggleNode(nodeId))
       );
       menu.addItem(
-        (i) => i.setTitle("\u7F16\u8F91" + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")).setIcon("pencil").onClick(() => void this.openSummaryModal(nodeId))
+        (i) => i.setTitle("\u7F16\u8F91" + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")).setIcon("pencil").onClick(() => void this.openSummaryNote(nodeId))
       );
     }
     if (node.type === "chapter") {
@@ -1915,6 +2163,9 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     );
     menu.addItem(
       (i) => i.setTitle("\u4E0B\u79FB").setIcon("arrow-down").onClick(() => this.moveNodeRelative(nodeId, 1))
+    );
+    menu.addItem(
+      (i) => i.setTitle("\u667A\u80FD\u6392\u5E8F").setIcon("list-ordered").onClick(() => this.smartSort(nodeId))
     );
     menu.addSeparator();
     menu.addItem(
@@ -1971,7 +2222,17 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     if (!targetId || this.canDropOnto(this.dragNodeId, targetId)) {
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-      this.setDragHighlight(targetId);
+    }
+    if (this.dragRafId === null) {
+      this.dragRafId = requestAnimationFrame(() => {
+        this.dragRafId = null;
+        if (!this.dragNodeId) return;
+        if (!targetId || this.canDropOnto(this.dragNodeId, targetId)) {
+          this.setDragHighlight(targetId);
+        } else {
+          this.setDragHighlight(null);
+        }
+      });
     }
   }
   onDrop(e) {
@@ -1986,6 +2247,10 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     var _a, _b, _c;
     this.dragNodeId = null;
     this.dragOverTargetId = null;
+    if (this.dragRafId !== null) {
+      cancelAnimationFrame(this.dragRafId);
+      this.dragRafId = null;
+    }
     (_a = this.matrixEl) == null ? void 0 : _a.querySelectorAll(".chs-drop-target").forEach((el) => el.removeClass("chs-drop-target"));
     (_b = this.matrixEl) == null ? void 0 : _b.querySelectorAll(".chs-drop-root").forEach((el) => el.removeClass("chs-drop-root"));
     (_c = this.matrixEl) == null ? void 0 : _c.querySelectorAll(".is-dragging").forEach((el) => el.removeClass("is-dragging"));
@@ -2055,6 +2320,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     if (oldArr === drop.arr && oldIndex !== -1 && oldIndex < drop.index) index -= 1;
     index = Math.max(0, Math.min(index, drop.arr.length));
     drop.arr.splice(index, 0, dragged);
+    if (dragged.type === "chapter") sortChapterSiblings(drop.arr);
     await this.syncNodeFiles(dragged);
     await this.plugin.saveSettings();
     this.render();
@@ -2521,6 +2787,16 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           return (_a = this.getOpenView()) == null ? void 0 : _a.openCreateBook();
         });
       }
+    });
+    this.addCommand({
+      id: "return-matrix",
+      name: "\u8FD4\u56DE\u62C6\u4E66\u77E9\u9635",
+      callback: () => {
+        void this.activateView();
+      }
+    });
+    this.registerObsidianProtocolHandler("chaishu-matrix-pro", () => {
+      void this.activateView();
     });
     this.addSettingTab(new ChaiShuSettingTab(this.app, this));
     this.registerEvent(
