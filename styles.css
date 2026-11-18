@@ -920,17 +920,6 @@ tr.chs-drop-root {
   text-decoration: none;
 }
 
-/* Summary trailing row (V1.6: summary rendered BELOW chapter notes) */
-.chs-summary-label {
-  cursor: default;
-}
-
-.chs-summary-label-text {
-  font-size: 12px;
-  font-style: italic;
-  color: var(--text-muted);
-}
-
 /* -------------------------------------------------------- mobile / narrow */
 @media (max-width: 640px), (max-height: 500px) and (orientation: landscape) {
   .chs-content {

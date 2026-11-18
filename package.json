@@ -1,6 +1,6 @@
 {
   "name": "chaishu-matrix-pro",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "ChaiShu Matrix Pro — 章节×维度的可视化拆书矩阵，单元格与 Obsidian 笔记双向联动、自动归档。",
   "main": "main.js",
   "scripts": {

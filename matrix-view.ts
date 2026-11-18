@@ -513,6 +513,15 @@ export class ChaiShuMatrixView extends ItemView {
 
   private renderNodeRow(tbody: HTMLElement, node: NodeData, depth: number): void {
     const book = this.book as BookData;
+
+    // V1.8: inverted outline — render children (chapters) ABOVE the volume/unit
+    // node, so the first rows are concrete chapters instead of blank containers.
+    if (node.type !== "chapter" && !node.collapsed) {
+      for (const child of node.children) {
+        this.renderNodeRow(tbody, child, depth + 1);
+      }
+    }
+
     const tr = tbody.createEl("tr");
 
     const nodeTd = tr.createEl("td", { cls: "chs-node" });
@@ -536,42 +545,13 @@ export class ChaiShuMatrixView extends ItemView {
       }
       tr.createEl("td", { cls: "chs-cell-filler" });
     } else {
-      // Volume/unit row: fill the data columns with empty cells. The summary
-      // is rendered BELOW the children as a trailing row (V1.6).
-      for (let i = 0; i < book.dimensions.length + 1; i++) {
-        tr.createEl("td", { cls: "chs-cell-filler" });
-      }
+      // V1.8: volume/unit row renders a wide summary preview box across all
+      // data columns (replaces the old trailing summary row).
+      const summaryTd = tr.createEl("td", { cls: "chs-summary" });
+      summaryTd.dataset.summaryId = node.id;
+      summaryTd.setAttribute("colspan", String(book.dimensions.length + 1));
+      this.renderSummaryCell(summaryTd, node);
     }
-
-    if (node.type !== "chapter" && !node.collapsed) {
-      for (const child of node.children) {
-        this.renderNodeRow(tbody, child, depth + 1);
-      }
-      this.renderSummaryRow(tbody, node, depth);
-    }
-  }
-
-  /** Render the volume/unit summary as a trailing row BELOW its children (V1.6). */
-  private renderSummaryRow(tbody: HTMLElement, node: NodeData, depth: number): void {
-    const book = this.book as BookData;
-    const hasSummary =
-      !!node.summaryFile &&
-      this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof TFile;
-    if (!hasSummary) return;
-
-    const tr = tbody.createEl("tr", { cls: "chs-summary-row" });
-    const labelTd = tr.createEl("td", { cls: "chs-node chs-summary-label" });
-    labelTd.dataset.nodeId = node.id;
-    labelTd.dataset.nodeType = node.type;
-    labelTd.style.paddingLeft = (depth + 1) * 16 + 8 + "px";
-    labelTd.createSpan("chs-summary-label-text").setText(
-      "📝 " + (node.type === "volume" ? "卷总结" : "单元总结")
-    );
-
-    const summaryTd = tr.createEl("td", { cls: "chs-summary" });
-    summaryTd.dataset.summaryId = node.id;
-    summaryTd.setAttribute("colspan", String(book.dimensions.length + 1));
-    this.renderSummaryCell(summaryTd, node);
   }
 
   private renderNodeCell(td: HTMLElement, node: NodeData, depth: number): void {
@@ -677,7 +657,7 @@ export class ChaiShuMatrixView extends ItemView {
     } else {
       td.addClass("is-empty");
       td.createSpan("chs-summary-hint").setText(
-        "点击填写" + (node.type === "volume" ? "卷总结" : "单元总结")
+        "+ 点击添加" + (node.type === "volume" ? "卷总结" : "单元总结")
       );
     }
   }
@@ -751,7 +731,7 @@ export class ChaiShuMatrixView extends ItemView {
       td.removeClass("is-filled");
       td.addClass("is-empty");
       td.createSpan("chs-summary-hint").setText(
-        "点击填写" + (node.type === "volume" ? "卷总结" : "单元总结")
+        "+ 点击添加" + (node.type === "volume" ? "卷总结" : "单元总结")
       );
       this.updateStats();
       return;
@@ -768,7 +748,7 @@ export class ChaiShuMatrixView extends ItemView {
       td.removeClass("is-filled");
       td.addClass("is-empty");
       td.createSpan("chs-summary-hint").setText(
-        "点击填写" + (node.type === "volume" ? "卷总结" : "单元总结")
+        "+ 点击添加" + (node.type === "volume" ? "卷总结" : "单元总结")
       );
       return;
     }

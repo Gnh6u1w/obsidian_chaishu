@@ -1612,6 +1612,11 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
   }
   renderNodeRow(tbody, node, depth) {
     const book = this.book;
+    if (node.type !== "chapter" && !node.collapsed) {
+      for (const child of node.children) {
+        this.renderNodeRow(tbody, child, depth + 1);
+      }
+    }
     const tr = tbody.createEl("tr");
     const nodeTd = tr.createEl("td", { cls: "chs-node" });
     this.renderNodeCell(nodeTd, node, depth);
@@ -1633,34 +1638,11 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       }
       tr.createEl("td", { cls: "chs-cell-filler" });
     } else {
-      for (let i = 0; i < book.dimensions.length + 1; i++) {
-        tr.createEl("td", { cls: "chs-cell-filler" });
-      }
+      const summaryTd = tr.createEl("td", { cls: "chs-summary" });
+      summaryTd.dataset.summaryId = node.id;
+      summaryTd.setAttribute("colspan", String(book.dimensions.length + 1));
+      this.renderSummaryCell(summaryTd, node);
     }
-    if (node.type !== "chapter" && !node.collapsed) {
-      for (const child of node.children) {
-        this.renderNodeRow(tbody, child, depth + 1);
-      }
-      this.renderSummaryRow(tbody, node, depth);
-    }
-  }
-  /** Render the volume/unit summary as a trailing row BELOW its children (V1.6). */
-  renderSummaryRow(tbody, node, depth) {
-    const book = this.book;
-    const hasSummary = !!node.summaryFile && this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof import_obsidian3.TFile;
-    if (!hasSummary) return;
-    const tr = tbody.createEl("tr", { cls: "chs-summary-row" });
-    const labelTd = tr.createEl("td", { cls: "chs-node chs-summary-label" });
-    labelTd.dataset.nodeId = node.id;
-    labelTd.dataset.nodeType = node.type;
-    labelTd.style.paddingLeft = (depth + 1) * 16 + 8 + "px";
-    labelTd.createSpan("chs-summary-label-text").setText(
-      "\u{1F4DD} " + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")
-    );
-    const summaryTd = tr.createEl("td", { cls: "chs-summary" });
-    summaryTd.dataset.summaryId = node.id;
-    summaryTd.setAttribute("colspan", String(book.dimensions.length + 1));
-    this.renderSummaryCell(summaryTd, node);
   }
   renderNodeCell(td, node, depth) {
     var _a;
@@ -1753,7 +1735,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     } else {
       td.addClass("is-empty");
       td.createSpan("chs-summary-hint").setText(
-        "\u70B9\u51FB\u586B\u5199" + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")
+        "+ \u70B9\u51FB\u6DFB\u52A0" + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")
       );
     }
   }
@@ -1816,7 +1798,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       td.removeClass("is-filled");
       td.addClass("is-empty");
       td.createSpan("chs-summary-hint").setText(
-        "\u70B9\u51FB\u586B\u5199" + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")
+        "+ \u70B9\u51FB\u6DFB\u52A0" + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")
       );
       this.updateStats();
       return;
@@ -1831,7 +1813,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       td.removeClass("is-filled");
       td.addClass("is-empty");
       td.createSpan("chs-summary-hint").setText(
-        "\u70B9\u51FB\u586B\u5199" + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")
+        "+ \u70B9\u51FB\u6DFB\u52A0" + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")
       );
       return;
     }
