@@ -340,6 +340,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  touch-action: pan-x pan-y;
   border: 1px solid var(--background-modifier-border);
   border-radius: 10px;
   background: var(--background-primary);
@@ -885,8 +886,41 @@ tr.chs-drop-root {
   margin-bottom: 4px;
 }
 
+/* In-note return link (rendered as a button by the markdown post-processor) */
+.chs-return-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--interactive-accent);
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  margin-top: 12px;
+}
+
+.chs-return-link:hover {
+  background: var(--interactive-accent-hover);
+  text-decoration: none;
+}
+
+/* Summary trailing row (V1.6: summary rendered BELOW chapter notes) */
+.chs-summary-label {
+  cursor: default;
+}
+
+.chs-summary-label-text {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
 /* -------------------------------------------------------- mobile / narrow */
-@media (max-width: 640px) {
+@media (max-width: 640px), (max-height: 500px) and (orientation: landscape) {
   .chs-content {
     padding: 6px;
     overflow-y: auto;

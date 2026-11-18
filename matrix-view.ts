@@ -2,6 +2,7 @@ import {
   ItemView,
   Menu,
   Notice,
+  Platform,
   setIcon,
   TFile,
   WorkspaceLeaf,
@@ -440,10 +441,14 @@ export class ChaiShuMatrixView extends ItemView {
     const table = this.matrixEl;
     table.empty();
 
+    const collapsed = this.settings.outlineCollapsed;
+
     // Fixed column widths (used with `table-layout: fixed` in styles.css).
+    // When the outline is collapsed, shrink the node column to match the 34px
+    // corner so header labels stay aligned with the data cells (V1.6).
     const colgroup = table.createEl("colgroup");
     const nodeCol = colgroup.createEl("col");
-    nodeCol.style.width = "var(--chs-node-w, 200px)";
+    nodeCol.style.width = collapsed ? "34px" : "var(--chs-node-w, 200px)";
     for (const dim of book.dimensions) {
       const c = colgroup.createEl("col");
       c.style.width = "var(--chs-col-w, 150px)";
@@ -451,7 +456,6 @@ export class ChaiShuMatrixView extends ItemView {
     const fillerCol = colgroup.createEl("col");
     fillerCol.style.width = "var(--chs-col-w, 150px)";
 
-    const collapsed = this.settings.outlineCollapsed;
     table.toggleClass("chs-outline-collapsed", collapsed);
 
     const thead = table.createEl("thead");
@@ -531,17 +535,42 @@ export class ChaiShuMatrixView extends ItemView {
       }
       tr.createEl("td", { cls: "chs-cell-filler" });
     } else {
-      const summaryTd = tr.createEl("td", { cls: "chs-summary" });
-      summaryTd.dataset.summaryId = node.id;
-      summaryTd.setAttribute("colspan", String(book.dimensions.length + 1));
-      this.renderSummaryCell(summaryTd, node);
+      // Volume/unit row: fill the data columns with empty cells. The summary
+      // is rendered BELOW the children as a trailing row (V1.6).
+      for (let i = 0; i < book.dimensions.length + 1; i++) {
+        tr.createEl("td", { cls: "chs-cell-filler" });
+      }
     }
 
     if (node.type !== "chapter" && !node.collapsed) {
       for (const child of node.children) {
         this.renderNodeRow(tbody, child, depth + 1);
       }
+      this.renderSummaryRow(tbody, node, depth);
     }
+  }
+
+  /** Render the volume/unit summary as a trailing row BELOW its children (V1.6). */
+  private renderSummaryRow(tbody: HTMLElement, node: NodeData, depth: number): void {
+    const book = this.book as BookData;
+    const hasSummary =
+      !!node.summaryFile &&
+      this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof TFile;
+    if (!hasSummary) return;
+
+    const tr = tbody.createEl("tr", { cls: "chs-summary-row" });
+    const labelTd = tr.createEl("td", { cls: "chs-node chs-summary-label" });
+    labelTd.dataset.nodeId = node.id;
+    labelTd.dataset.nodeType = node.type;
+    labelTd.style.paddingLeft = (depth + 1) * 16 + 8 + "px";
+    labelTd.createSpan("chs-summary-label-text").setText(
+      "📝 " + (node.type === "volume" ? "卷总结" : "单元总结")
+    );
+
+    const summaryTd = tr.createEl("td", { cls: "chs-summary" });
+    summaryTd.dataset.summaryId = node.id;
+    summaryTd.setAttribute("colspan", String(book.dimensions.length + 1));
+    this.renderSummaryCell(summaryTd, node);
   }
 
   private renderNodeCell(td: HTMLElement, node: NodeData, depth: number): void {
@@ -576,9 +605,12 @@ export class ChaiShuMatrixView extends ItemView {
     td.createSpan("chs-node-name").setText(node.name);
 
     if (node.type !== "chapter") {
+      const hasSummary =
+        !!node.summaryFile &&
+        this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof TFile;
       const sbtn = td.createEl("button", {
         cls: "chs-btn chs-btn-sm chs-node-summary-btn",
-        text: node.summaryHasContent ? "✓总结" : "总结",
+        text: hasSummary ? "✓总结" : "＋总结",
       });
       sbtn.dataset.summaryId = node.id;
     }
@@ -632,13 +664,12 @@ export class ChaiShuMatrixView extends ItemView {
   }
 
   private renderSummaryCell(td: HTMLElement, node: NodeData): void {
-    const hasSummary =
-      node.summaryHasContent &&
+    const fileExists =
       !!node.summaryFile &&
       this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof TFile;
     td.empty();
     td.removeClass("is-filled", "is-empty");
-    if (hasSummary) {
+    if (fileExists) {
       td.addClass("is-filled");
       td.createDiv("chs-summary-body").setText("…");
       this.observer?.observe(td);
@@ -930,12 +961,13 @@ export class ChaiShuMatrixView extends ItemView {
       return;
     }
     // Open in the user's current area, but never clobber the matrix tab itself.
-    const leaf =
-      this.app.workspace.activeLeaf === this.leaf
-        ? this.app.workspace.getLeaf("tab")
-        : this.app.workspace.getLeaf(false);
+    const workspace = this.app.workspace;
+    let leaf = workspace.getLeaf(false);
+    if (leaf === this.leaf) {
+      leaf = Platform.isMobile ? workspace.getLeaf("tab") : workspace.getLeaf("split");
+    }
     await leaf.openFile(file);
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    workspace.setActiveLeaf(leaf, { focus: true });
   }
 
   private deleteCellNote(key: string, cell: CellData): void {
@@ -1681,7 +1713,6 @@ export class ChaiShuMatrixView extends ItemView {
     const summaryNodes = [...collectVolumes(book.structure), ...collectUnits(book.structure)];
     for (const sn of summaryNodes) {
       if (
-        sn.summaryHasContent &&
         sn.summaryFile &&
         this.app.vault.getAbstractFileByPath(sn.summaryFile) instanceof TFile
       ) {

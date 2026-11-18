@@ -13,6 +13,7 @@ import {
   VIEW_TYPE_CHAISHU_MATRIX,
 } from "./types";
 import {
+  bookFolderName,
   buildChapterContent,
   cellKey,
   collectChapters,
@@ -29,6 +30,7 @@ export default class ChaiShuMatrixPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    await this.relinkNotes();
 
     this.registerView(VIEW_TYPE_CHAISHU_MATRIX, (leaf: WorkspaceLeaf) => {
       const view = new ChaiShuMatrixView(leaf, this);
@@ -67,6 +69,18 @@ export default class ChaiShuMatrixPlugin extends Plugin {
     // In-note return link: [🔙 返回拆书矩阵](obsidian://chaishu-matrix-pro)
     this.registerObsidianProtocolHandler("chaishu-matrix-pro", () => {
       void this.activateView();
+    });
+
+    // Make the in-note return link a reliably-clickable button in Reading/Live Preview.
+    this.registerMarkdownPostProcessor((el) => {
+      el.querySelectorAll<HTMLAnchorElement>('a[href="obsidian://chaishu-matrix-pro"]').forEach((a) => {
+        a.classList.add("chs-return-link");
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void this.activateView();
+        });
+      });
     });
 
     this.addSettingTab(new ChaiShuSettingTab(this.app, this));
@@ -327,6 +341,107 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         }
       }
     }
+    if (changed) {
+      await this.saveSettings();
+      this.notifyViews();
+    }
+  }
+
+  // ------------------------------------------------------ note re-linking
+
+  /** Re-link cell/summary notes whose stored path no longer resolves (e.g. after
+   *  an upgrade moved or renamed files). Matches notes by their frontmatter. */
+  private async relinkNotes(): Promise<void> {
+    const vault = this.app.vault;
+    const resolves = (p: string): boolean =>
+      !!p && vault.getAbstractFileByPath(p) instanceof TFile;
+
+    // Only run the metadata scan when at least one stored path is stale.
+    let stale = false;
+    outer: for (const book of this.settings.books) {
+      for (const ch of collectChapters(book.structure)) {
+        for (const d of book.dimensions) {
+          if (d.isChart) continue;
+          const c = book.cells[cellKey(ch.id, d.id)];
+          if (c?.filePath && !resolves(c.filePath)) {
+            stale = true;
+            break outer;
+          }
+        }
+      }
+      for (const n of this.allNodes(book)) {
+        if (n.type !== "chapter" && n.summaryFile && !resolves(n.summaryFile)) {
+          stale = true;
+          break outer;
+        }
+      }
+    }
+    if (!stale) return;
+
+    let changed = false;
+    const files = vault.getMarkdownFiles();
+    for (const book of this.settings.books) {
+      const bookTitle = bookFolderName(book.bookInfo.title); // 《书名》
+      const chByName = new Map<string, NodeData>();
+      for (const ch of collectChapters(book.structure)) chByName.set(ch.name, ch);
+      const dimByName = new Map<string, Dimension>();
+      for (const d of book.dimensions) if (!d.isChart) dimByName.set(d.name, d);
+      const volByName = new Map<string, NodeData>();
+      const unitByName = new Map<string, NodeData>();
+      for (const n of this.allNodes(book)) {
+        if (n.type === "volume") volByName.set(n.name, n);
+        else if (n.type === "unit") unitByName.set(n.name, n);
+      }
+
+      for (const file of files) {
+        const cache = this.app.metadataCache.getFileCache(file);
+        const fm = cache?.frontmatter;
+        if (!fm) continue;
+
+        // --- chapter cell notes (multiple YAML key eras) ---
+        const fmChapter = String(fm["章节名称"] ?? fm["chapter"] ?? fm["章节"] ?? "");
+        const fmDim = String(fm["分析维度"] ?? fm["dimension"] ?? fm["维度"] ?? "");
+        if (fmChapter && fmDim) {
+          const fmBook = String(fm["拆书项目"] ?? fm["book"] ?? fm["书名"] ?? "");
+          if (fmBook && fmBook !== bookTitle && fmBook !== book.bookInfo.title) continue;
+          const ch = chByName.get(fmChapter);
+          const dim = dimByName.get(fmDim);
+          if (!ch || !dim) continue;
+          const key = cellKey(ch.id, dim.id);
+          const cell = book.cells[key];
+          if (cell?.filePath && resolves(cell.filePath)) continue; // already bound
+          if (cell) {
+            cell.filePath = file.path;
+            cell.hasContent = true;
+          } else {
+            book.cells[key] = { filePath: file.path, hasContent: true };
+          }
+          changed = true;
+          continue;
+        }
+
+        // --- volume/unit summary notes ---
+        const fmType = String(fm["类型"] ?? fm["type"] ?? "");
+        if (fmType === "卷总结") {
+          const volName = String(fm["卷名"] ?? fm["volume"] ?? "");
+          const v = volName ? volByName.get(volName) : null;
+          if (v && !(v.summaryFile && resolves(v.summaryFile))) {
+            v.summaryFile = file.path;
+            v.summaryHasContent = true;
+            changed = true;
+          }
+        } else if (fmType === "单元总结") {
+          const unitName = String(fm["单元名"] ?? fm["unit"] ?? "");
+          const u = unitName ? unitByName.get(unitName) : null;
+          if (u && !(u.summaryFile && resolves(u.summaryFile))) {
+            u.summaryFile = file.path;
+            u.summaryHasContent = true;
+            changed = true;
+          }
+        }
+      }
+    }
+
     if (changed) {
       await this.saveSettings();
       this.notifyViews();

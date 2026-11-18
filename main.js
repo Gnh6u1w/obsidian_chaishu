@@ -1543,16 +1543,16 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     const book = this.book;
     const table = this.matrixEl;
     table.empty();
+    const collapsed = this.settings.outlineCollapsed;
     const colgroup = table.createEl("colgroup");
     const nodeCol = colgroup.createEl("col");
-    nodeCol.style.width = "var(--chs-node-w, 200px)";
+    nodeCol.style.width = collapsed ? "34px" : "var(--chs-node-w, 200px)";
     for (const dim of book.dimensions) {
       const c = colgroup.createEl("col");
       c.style.width = "var(--chs-col-w, 150px)";
     }
     const fillerCol = colgroup.createEl("col");
     fillerCol.style.width = "var(--chs-col-w, 150px)";
-    const collapsed = this.settings.outlineCollapsed;
     table.toggleClass("chs-outline-collapsed", collapsed);
     const thead = table.createEl("thead");
     const headRow = thead.createEl("tr");
@@ -1623,16 +1623,34 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       }
       tr.createEl("td", { cls: "chs-cell-filler" });
     } else {
-      const summaryTd = tr.createEl("td", { cls: "chs-summary" });
-      summaryTd.dataset.summaryId = node.id;
-      summaryTd.setAttribute("colspan", String(book.dimensions.length + 1));
-      this.renderSummaryCell(summaryTd, node);
+      for (let i = 0; i < book.dimensions.length + 1; i++) {
+        tr.createEl("td", { cls: "chs-cell-filler" });
+      }
     }
     if (node.type !== "chapter" && !node.collapsed) {
       for (const child of node.children) {
         this.renderNodeRow(tbody, child, depth + 1);
       }
+      this.renderSummaryRow(tbody, node, depth);
     }
+  }
+  /** Render the volume/unit summary as a trailing row BELOW its children (V1.6). */
+  renderSummaryRow(tbody, node, depth) {
+    const book = this.book;
+    const hasSummary = !!node.summaryFile && this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof import_obsidian3.TFile;
+    if (!hasSummary) return;
+    const tr = tbody.createEl("tr", { cls: "chs-summary-row" });
+    const labelTd = tr.createEl("td", { cls: "chs-node chs-summary-label" });
+    labelTd.dataset.nodeId = node.id;
+    labelTd.dataset.nodeType = node.type;
+    labelTd.style.paddingLeft = (depth + 1) * 16 + 8 + "px";
+    labelTd.createSpan("chs-summary-label-text").setText(
+      "\u{1F4DD} " + (node.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3")
+    );
+    const summaryTd = tr.createEl("td", { cls: "chs-summary" });
+    summaryTd.dataset.summaryId = node.id;
+    summaryTd.setAttribute("colspan", String(book.dimensions.length + 1));
+    this.renderSummaryCell(summaryTd, node);
   }
   renderNodeCell(td, node, depth) {
     var _a;
@@ -1663,9 +1681,10 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     );
     td.createSpan("chs-node-name").setText(node.name);
     if (node.type !== "chapter") {
+      const hasSummary = !!node.summaryFile && this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof import_obsidian3.TFile;
       const sbtn = td.createEl("button", {
         cls: "chs-btn chs-btn-sm chs-node-summary-btn",
-        text: node.summaryHasContent ? "\u2713\u603B\u7ED3" : "\u603B\u7ED3"
+        text: hasSummary ? "\u2713\u603B\u7ED3" : "\uFF0B\u603B\u7ED3"
       });
       sbtn.dataset.summaryId = node.id;
     }
@@ -1714,10 +1733,10 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
   }
   renderSummaryCell(td, node) {
     var _a;
-    const hasSummary = node.summaryHasContent && !!node.summaryFile && this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof import_obsidian3.TFile;
+    const fileExists = !!node.summaryFile && this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof import_obsidian3.TFile;
     td.empty();
     td.removeClass("is-filled", "is-empty");
-    if (hasSummary) {
+    if (fileExists) {
       td.addClass("is-filled");
       td.createDiv("chs-summary-body").setText("\u2026");
       (_a = this.observer) == null ? void 0 : _a.observe(td);
@@ -1969,9 +1988,13 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       new import_obsidian3.Notice("\u7B14\u8BB0\u4E0D\u5B58\u5728\uFF1A" + filePath);
       return;
     }
-    const leaf = this.app.workspace.activeLeaf === this.leaf ? this.app.workspace.getLeaf("tab") : this.app.workspace.getLeaf(false);
+    const workspace = this.app.workspace;
+    let leaf = workspace.getLeaf(false);
+    if (leaf === this.leaf) {
+      leaf = import_obsidian3.Platform.isMobile ? workspace.getLeaf("tab") : workspace.getLeaf("split");
+    }
     await leaf.openFile(file);
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    workspace.setActiveLeaf(leaf, { focus: true });
   }
   deleteCellNote(key, cell) {
     new ConfirmModal(this.app, {
@@ -2621,7 +2644,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     }
     const summaryNodes = [...collectVolumes(book.structure), ...collectUnits(book.structure)];
     for (const sn of summaryNodes) {
-      if (sn.summaryHasContent && sn.summaryFile && this.app.vault.getAbstractFileByPath(sn.summaryFile) instanceof import_obsidian3.TFile) {
+      if (sn.summaryFile && this.app.vault.getAbstractFileByPath(sn.summaryFile) instanceof import_obsidian3.TFile) {
         n++;
       }
     }
@@ -2763,6 +2786,7 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
   }
   async onload() {
     await this.loadSettings();
+    await this.relinkNotes();
     this.registerView(VIEW_TYPE_CHAISHU_MATRIX, (leaf) => {
       const view = new ChaiShuMatrixView(leaf, this);
       this.views.add(view);
@@ -2797,6 +2821,16 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
     });
     this.registerObsidianProtocolHandler("chaishu-matrix-pro", () => {
       void this.activateView();
+    });
+    this.registerMarkdownPostProcessor((el) => {
+      el.querySelectorAll('a[href="obsidian://chaishu-matrix-pro"]').forEach((a) => {
+        a.classList.add("chs-return-link");
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void this.activateView();
+        });
+      });
     });
     this.addSettingTab(new ChaiShuSettingTab(this.app, this));
     this.registerEvent(
@@ -3024,6 +3058,96 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           node.summaryFile = "";
           node.summaryHasContent = false;
           changed = true;
+        }
+      }
+    }
+    if (changed) {
+      await this.saveSettings();
+      this.notifyViews();
+    }
+  }
+  // ------------------------------------------------------ note re-linking
+  /** Re-link cell/summary notes whose stored path no longer resolves (e.g. after
+   *  an upgrade moved or renamed files). Matches notes by their frontmatter. */
+  async relinkNotes() {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
+    const vault = this.app.vault;
+    const resolves = (p) => !!p && vault.getAbstractFileByPath(p) instanceof import_obsidian5.TFile;
+    let stale = false;
+    outer: for (const book of this.settings.books) {
+      for (const ch of collectChapters(book.structure)) {
+        for (const d of book.dimensions) {
+          if (d.isChart) continue;
+          const c = book.cells[cellKey(ch.id, d.id)];
+          if ((c == null ? void 0 : c.filePath) && !resolves(c.filePath)) {
+            stale = true;
+            break outer;
+          }
+        }
+      }
+      for (const n of this.allNodes(book)) {
+        if (n.type !== "chapter" && n.summaryFile && !resolves(n.summaryFile)) {
+          stale = true;
+          break outer;
+        }
+      }
+    }
+    if (!stale) return;
+    let changed = false;
+    const files = vault.getMarkdownFiles();
+    for (const book of this.settings.books) {
+      const bookTitle = bookFolderName(book.bookInfo.title);
+      const chByName = /* @__PURE__ */ new Map();
+      for (const ch of collectChapters(book.structure)) chByName.set(ch.name, ch);
+      const dimByName = /* @__PURE__ */ new Map();
+      for (const d of book.dimensions) if (!d.isChart) dimByName.set(d.name, d);
+      const volByName = /* @__PURE__ */ new Map();
+      const unitByName = /* @__PURE__ */ new Map();
+      for (const n of this.allNodes(book)) {
+        if (n.type === "volume") volByName.set(n.name, n);
+        else if (n.type === "unit") unitByName.set(n.name, n);
+      }
+      for (const file of files) {
+        const cache = this.app.metadataCache.getFileCache(file);
+        const fm = cache == null ? void 0 : cache.frontmatter;
+        if (!fm) continue;
+        const fmChapter = String((_c = (_b = (_a = fm["\u7AE0\u8282\u540D\u79F0"]) != null ? _a : fm["chapter"]) != null ? _b : fm["\u7AE0\u8282"]) != null ? _c : "");
+        const fmDim = String((_f = (_e = (_d = fm["\u5206\u6790\u7EF4\u5EA6"]) != null ? _d : fm["dimension"]) != null ? _e : fm["\u7EF4\u5EA6"]) != null ? _f : "");
+        if (fmChapter && fmDim) {
+          const fmBook = String((_i = (_h = (_g = fm["\u62C6\u4E66\u9879\u76EE"]) != null ? _g : fm["book"]) != null ? _h : fm["\u4E66\u540D"]) != null ? _i : "");
+          if (fmBook && fmBook !== bookTitle && fmBook !== book.bookInfo.title) continue;
+          const ch = chByName.get(fmChapter);
+          const dim = dimByName.get(fmDim);
+          if (!ch || !dim) continue;
+          const key = cellKey(ch.id, dim.id);
+          const cell = book.cells[key];
+          if ((cell == null ? void 0 : cell.filePath) && resolves(cell.filePath)) continue;
+          if (cell) {
+            cell.filePath = file.path;
+            cell.hasContent = true;
+          } else {
+            book.cells[key] = { filePath: file.path, hasContent: true };
+          }
+          changed = true;
+          continue;
+        }
+        const fmType = String((_k = (_j = fm["\u7C7B\u578B"]) != null ? _j : fm["type"]) != null ? _k : "");
+        if (fmType === "\u5377\u603B\u7ED3") {
+          const volName = String((_m = (_l = fm["\u5377\u540D"]) != null ? _l : fm["volume"]) != null ? _m : "");
+          const v = volName ? volByName.get(volName) : null;
+          if (v && !(v.summaryFile && resolves(v.summaryFile))) {
+            v.summaryFile = file.path;
+            v.summaryHasContent = true;
+            changed = true;
+          }
+        } else if (fmType === "\u5355\u5143\u603B\u7ED3") {
+          const unitName = String((_o = (_n = fm["\u5355\u5143\u540D"]) != null ? _n : fm["unit"]) != null ? _o : "");
+          const u = unitName ? unitByName.get(unitName) : null;
+          if (u && !(u.summaryFile && resolves(u.summaryFile))) {
+            u.summaryFile = file.path;
+            u.summaryHasContent = true;
+            changed = true;
+          }
         }
       }
     }
