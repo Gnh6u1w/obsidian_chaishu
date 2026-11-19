@@ -1,4 +1,4 @@
-import { ItemView, Menu, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, MarkdownRenderer, Menu, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 import type ChaiShuMatrixPlugin from "./main";
 import {
   BookData,
@@ -15,7 +15,7 @@ import {
   sanitizeFileName,
   uid,
 } from "./store";
-import { ConfirmModal, DimensionModal, PromptModal } from "./modals";
+import { ConfirmModal, DimensionModal, PromptModal, RelationshipModal } from "./modals";
 
 const MAX_PREVIEW = 200;
 
@@ -756,43 +756,92 @@ export class ChaiShuCharacterView extends ItemView {
     const wrap = this.contentEl.createDiv("chs-graph-wrap");
 
     const controls = wrap.createDiv("chs-graph-controls");
-    controls.createSpan("chs-graph-hint").setText("拖拽节点移动 · 滚轮/双指缩放 · 拖拽两节点连线建关系 · 点击节点聚焦");
-    const seg = controls.createDiv("chs-seg");
-    const factionBtn = seg.createEl("button", {
-      text: "阵营着色",
-      cls: "chs-btn chs-btn-sm" + (this.graphColorMode === "faction" ? " chs-btn-primary" : ""),
+    controls.createSpan("chs-graph-hint").setText(
+      "节点按阵营着色 · 实线 = 手动关系 · 虚线 = 双链自动推导"
+    );
+    const addRel = controls.createEl("button", {
+      text: "＋ 添加关系",
+      cls: "chs-btn chs-btn-sm chs-btn-primary",
     });
-    factionBtn.addEventListener("click", () => {
-      this.graphColorMode = "faction";
-      this.render();
-    });
-    const relBtn = seg.createEl("button", {
-      text: "关系圈着色",
-      cls: "chs-btn chs-btn-sm" + (this.graphColorMode === "relation" ? " chs-btn-primary" : ""),
-    });
-    relBtn.addEventListener("click", () => {
-      this.graphColorMode = "relation";
-      this.render();
-    });
+    addRel.addEventListener("click", () => this.openAddRelationship(book));
 
-    const canvas = wrap.createEl("canvas");
-    canvas.addClass("chs-graph-canvas");
-    this.graphCanvas = canvas;
-    this.graphCtx = canvas.getContext("2d") as CanvasRenderingContext2D;
+    // faction legend
+    const legend = wrap.createDiv("chs-graph-legend");
+    const factions = book.factions ?? [];
+    const legendItem = (color: string, label: string) => {
+      const item = legend.createDiv("chs-legend-item");
+      item.createSpan("chs-legend-dot").style.background = color;
+      item.createSpan("chs-legend-label").setText(label);
+    };
+    for (const f of factions) legendItem(f.color || "#8b9bb4", f.name);
+    const unassigned = book.characters.filter((c) => !c.factionId).length;
+    if (unassigned > 0) legendItem("#8b9bb4", "未分配");
 
+    // Render the diagram with Obsidian's native Mermaid renderer.
+    const body = wrap.createDiv("chs-graph-mermaid");
     this.computeGraph(book);
-    this.initGraphPositions(book);
+    const source = this.buildMermaidSource(book);
+    void MarkdownRenderer.render(this.app, "```mermaid\n" + source + "\n```", body, "", this);
+  }
 
-    // Interaction via Pointer Events (unified mouse + touch).
-    canvas.addEventListener("pointerdown", (e) => this.onGraphPointerDown(e));
-    canvas.addEventListener("pointermove", (e) => this.onGraphPointerMove(e));
-    canvas.addEventListener("pointerup", (e) => this.onGraphPointerUp(e));
-    canvas.addEventListener("pointercancel", (e) => this.onGraphPointerUp(e));
-    canvas.addEventListener("wheel", (e) => this.onGraphWheel(e), { passive: false });
-    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  /** Serialise the character graph into a Mermaid `graph TD` diagram. */
+  private buildMermaidSource(book: BookData): string {
+    const esc = (s: string) => s.replace(/[`"|\\]/g, " ").replace(/\s+/g, " ").trim();
+    const chars = book.characters ?? [];
+    const factions = book.factions ?? [];
+    const lines: string[] = [
+      "graph TD",
+      '  classDef clsNone fill:#8b9bb4,stroke:#334155,color:#fff;',
+    ];
+    factions.forEach((f, i) => {
+      lines.push(`  classDef cls${i} fill:${f.color || "#8b9bb4"},stroke:#334155,color:#fff;`);
+    });
 
-    this.resizeGraphCanvas();
-    this.startGraphLoop(book);
+    const idOf = new Map<string, string>();
+    chars.forEach((c, i) => idOf.set(c.id, "n" + i));
+
+    const nodeClass = (c: CharacterData): string => {
+      if (!c.factionId) return "clsNone";
+      const idx = factions.findIndex((f) => f.id === c.factionId);
+      return idx >= 0 ? `cls${idx}` : "clsNone";
+    };
+
+    for (const c of chars) {
+      lines.push(`  ${idOf.get(c.id)}["${esc(c.name) || "（未命名）"}"]:::${nodeClass(c)}`);
+    }
+    if (chars.length === 0) {
+      lines.push('  empty["（暂无角色）"]:::clsNone');
+    }
+
+    for (const e of this.graphEdges) {
+      const a = idOf.get(e.from);
+      const b = idOf.get(e.to);
+      if (!a || !b) continue;
+      const label = esc(e.type) || "关联";
+      lines.push(e.explicit ? `  ${a} -->|${label}| ${b}` : `  ${a} -.->|${label}| ${b}`);
+    }
+
+    return lines.join("\n");
+  }
+
+  /** Manual relationship creation: pick two characters + a type. */
+  private openAddRelationship(book: BookData): void {
+    if (book.characters.length < 2) {
+      new Notice("至少需要两个角色才能建立关系");
+      return;
+    }
+    new RelationshipModal(this.app, {
+      characters: book.characters,
+      onSubmit: (from, to, type) => {
+        const t = sanitizeFileName(type) || "关联";
+        book.relationships = (book.relationships ?? []).filter(
+          (r) => !((r.from === from && r.to === to) || (r.from === to && r.to === from))
+        );
+        book.relationships.push({ id: uid("r"), from, to, type: t, explicit: true });
+        void this.plugin.saveSettings();
+        this.render();
+      },
+    }).open();
   }
 
   private resizeGraphCanvas(): void {

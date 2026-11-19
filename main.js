@@ -566,6 +566,56 @@ var PromptModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
 };
+var RelationshipModal = class extends import_obsidian2.Modal {
+  constructor(app, opts) {
+    super(app);
+    this.opts = opts;
+    this.fromId = "";
+    this.toId = "";
+    this.type = "";
+    if (opts.characters.length > 0) this.fromId = opts.characters[0].id;
+    if (opts.characters.length > 1) this.toId = opts.characters[1].id;
+  }
+  onOpen() {
+    this.contentEl.addClass("chs-modal");
+    this.contentEl.createEl("h2", { text: "\u5EFA\u7ACB\u5173\u7CFB" });
+    const mkSelect = (label, get, set) => {
+      const row = this.contentEl.createDiv("chs-modal-row");
+      row.createSpan("chs-modal-label").setText(label);
+      const sel = row.createEl("select", { cls: "chs-select" });
+      for (const c of this.opts.characters) {
+        const o = sel.createEl("option");
+        o.value = c.id;
+        o.textContent = c.name;
+      }
+      sel.value = get();
+      sel.addEventListener("change", () => set(sel.value));
+    };
+    mkSelect("\u89D2\u8272 A", () => this.fromId, (v) => this.fromId = v);
+    mkSelect("\u89D2\u8272 B", () => this.toId, (v) => this.toId = v);
+    const input = this.contentEl.createEl("input", { type: "text", cls: "chs-input" });
+    input.placeholder = "\u5173\u7CFB\u7C7B\u578B\uFF08\u7231\u60C5 / \u540C\u76DF / \u4EC7\u6068 / \u5E08\u5F92 / \u81EA\u5B9A\u4E49\u2026\uFF09";
+    input.addEventListener("input", () => this.type = input.value);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.submit();
+    });
+    const footer = this.contentEl.createDiv("chs-modal-actions");
+    new import_obsidian2.ButtonComponent(footer).setButtonText("\u53D6\u6D88").onClick(() => this.close());
+    new import_obsidian2.ButtonComponent(footer).setButtonText("\u5EFA\u7ACB\u8FDE\u7EBF").setCta().onClick(() => this.submit());
+    setTimeout(() => input.focus(), 0);
+  }
+  submit() {
+    if (!this.fromId || !this.toId || this.fromId === this.toId) {
+      new import_obsidian2.Notice("\u8BF7\u9009\u62E9\u4E24\u4E2A\u4E0D\u540C\u7684\u89D2\u8272");
+      return;
+    }
+    this.opts.onSubmit(this.fromId, this.toId, this.type);
+    this.close();
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 var BookCreateModal = class extends import_obsidian2.Modal {
   constructor(app, onSubmit) {
     super(app);
@@ -3497,40 +3547,86 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
   }
   // ================================================================ graph
   buildGraphView(book) {
+    var _a;
     const wrap = this.contentEl.createDiv("chs-graph-wrap");
     const controls = wrap.createDiv("chs-graph-controls");
-    controls.createSpan("chs-graph-hint").setText("\u62D6\u62FD\u8282\u70B9\u79FB\u52A8 \xB7 \u6EDA\u8F6E/\u53CC\u6307\u7F29\u653E \xB7 \u62D6\u62FD\u4E24\u8282\u70B9\u8FDE\u7EBF\u5EFA\u5173\u7CFB \xB7 \u70B9\u51FB\u8282\u70B9\u805A\u7126");
-    const seg = controls.createDiv("chs-seg");
-    const factionBtn = seg.createEl("button", {
-      text: "\u9635\u8425\u7740\u8272",
-      cls: "chs-btn chs-btn-sm" + (this.graphColorMode === "faction" ? " chs-btn-primary" : "")
+    controls.createSpan("chs-graph-hint").setText(
+      "\u8282\u70B9\u6309\u9635\u8425\u7740\u8272 \xB7 \u5B9E\u7EBF = \u624B\u52A8\u5173\u7CFB \xB7 \u865A\u7EBF = \u53CC\u94FE\u81EA\u52A8\u63A8\u5BFC"
+    );
+    const addRel = controls.createEl("button", {
+      text: "\uFF0B \u6DFB\u52A0\u5173\u7CFB",
+      cls: "chs-btn chs-btn-sm chs-btn-primary"
     });
-    factionBtn.addEventListener("click", () => {
-      this.graphColorMode = "faction";
-      this.render();
-    });
-    const relBtn = seg.createEl("button", {
-      text: "\u5173\u7CFB\u5708\u7740\u8272",
-      cls: "chs-btn chs-btn-sm" + (this.graphColorMode === "relation" ? " chs-btn-primary" : "")
-    });
-    relBtn.addEventListener("click", () => {
-      this.graphColorMode = "relation";
-      this.render();
-    });
-    const canvas = wrap.createEl("canvas");
-    canvas.addClass("chs-graph-canvas");
-    this.graphCanvas = canvas;
-    this.graphCtx = canvas.getContext("2d");
+    addRel.addEventListener("click", () => this.openAddRelationship(book));
+    const legend = wrap.createDiv("chs-graph-legend");
+    const factions = (_a = book.factions) != null ? _a : [];
+    const legendItem = (color, label) => {
+      const item = legend.createDiv("chs-legend-item");
+      item.createSpan("chs-legend-dot").style.background = color;
+      item.createSpan("chs-legend-label").setText(label);
+    };
+    for (const f of factions) legendItem(f.color || "#8b9bb4", f.name);
+    const unassigned = book.characters.filter((c) => !c.factionId).length;
+    if (unassigned > 0) legendItem("#8b9bb4", "\u672A\u5206\u914D");
+    const body = wrap.createDiv("chs-graph-mermaid");
     this.computeGraph(book);
-    this.initGraphPositions(book);
-    canvas.addEventListener("pointerdown", (e) => this.onGraphPointerDown(e));
-    canvas.addEventListener("pointermove", (e) => this.onGraphPointerMove(e));
-    canvas.addEventListener("pointerup", (e) => this.onGraphPointerUp(e));
-    canvas.addEventListener("pointercancel", (e) => this.onGraphPointerUp(e));
-    canvas.addEventListener("wheel", (e) => this.onGraphWheel(e), { passive: false });
-    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-    this.resizeGraphCanvas();
-    this.startGraphLoop(book);
+    const source = this.buildMermaidSource(book);
+    void import_obsidian4.MarkdownRenderer.render(this.app, "```mermaid\n" + source + "\n```", body, "", this);
+  }
+  /** Serialise the character graph into a Mermaid `graph TD` diagram. */
+  buildMermaidSource(book) {
+    var _a, _b;
+    const esc = (s) => s.replace(/[`"|\\]/g, " ").replace(/\s+/g, " ").trim();
+    const chars = (_a = book.characters) != null ? _a : [];
+    const factions = (_b = book.factions) != null ? _b : [];
+    const lines = [
+      "graph TD",
+      "  classDef clsNone fill:#8b9bb4,stroke:#334155,color:#fff;"
+    ];
+    factions.forEach((f, i) => {
+      lines.push(`  classDef cls${i} fill:${f.color || "#8b9bb4"},stroke:#334155,color:#fff;`);
+    });
+    const idOf = /* @__PURE__ */ new Map();
+    chars.forEach((c, i) => idOf.set(c.id, "n" + i));
+    const nodeClass = (c) => {
+      if (!c.factionId) return "clsNone";
+      const idx = factions.findIndex((f) => f.id === c.factionId);
+      return idx >= 0 ? `cls${idx}` : "clsNone";
+    };
+    for (const c of chars) {
+      lines.push(`  ${idOf.get(c.id)}["${esc(c.name) || "\uFF08\u672A\u547D\u540D\uFF09"}"]:::${nodeClass(c)}`);
+    }
+    if (chars.length === 0) {
+      lines.push('  empty["\uFF08\u6682\u65E0\u89D2\u8272\uFF09"]:::clsNone');
+    }
+    for (const e of this.graphEdges) {
+      const a = idOf.get(e.from);
+      const b = idOf.get(e.to);
+      if (!a || !b) continue;
+      const label = esc(e.type) || "\u5173\u8054";
+      lines.push(e.explicit ? `  ${a} -->|${label}| ${b}` : `  ${a} -.->|${label}| ${b}`);
+    }
+    return lines.join("\n");
+  }
+  /** Manual relationship creation: pick two characters + a type. */
+  openAddRelationship(book) {
+    if (book.characters.length < 2) {
+      new import_obsidian4.Notice("\u81F3\u5C11\u9700\u8981\u4E24\u4E2A\u89D2\u8272\u624D\u80FD\u5EFA\u7ACB\u5173\u7CFB");
+      return;
+    }
+    new RelationshipModal(this.app, {
+      characters: book.characters,
+      onSubmit: (from, to, type) => {
+        var _a;
+        const t = sanitizeFileName(type) || "\u5173\u8054";
+        book.relationships = ((_a = book.relationships) != null ? _a : []).filter(
+          (r) => !(r.from === from && r.to === to || r.from === to && r.to === from)
+        );
+        book.relationships.push({ id: uid("r"), from, to, type: t, explicit: true });
+        void this.plugin.saveSettings();
+        this.render();
+      }
+    }).open();
   }
   resizeGraphCanvas() {
     var _a, _b, _c;

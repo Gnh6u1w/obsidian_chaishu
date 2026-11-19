@@ -18,6 +18,7 @@ import {
   EMOTION_LEVELS,
   ImportRequest,
   BookData,
+  CharacterData,
 } from "./types";
 import {
   cellKey,
@@ -88,6 +89,71 @@ export class PromptModal extends Modal {
         this.close();
       });
     setTimeout(() => input.focus(), 0);
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+/** Pick two characters + a relationship type to create an explicit edge. */
+export class RelationshipModal extends Modal {
+  private fromId = "";
+  private toId = "";
+  private type = "";
+
+  constructor(
+    app: App,
+    private opts: {
+      characters: CharacterData[];
+      onSubmit: (fromId: string, toId: string, type: string) => void;
+    }
+  ) {
+    super(app);
+    if (opts.characters.length > 0) this.fromId = opts.characters[0].id;
+    if (opts.characters.length > 1) this.toId = opts.characters[1].id;
+  }
+
+  onOpen(): void {
+    this.contentEl.addClass("chs-modal");
+    this.contentEl.createEl("h2", { text: "建立关系" });
+
+    const mkSelect = (label: string, get: () => string, set: (v: string) => void) => {
+      const row = this.contentEl.createDiv("chs-modal-row");
+      row.createSpan("chs-modal-label").setText(label);
+      const sel = row.createEl("select", { cls: "chs-select" });
+      for (const c of this.opts.characters) {
+        const o = sel.createEl("option");
+        o.value = c.id;
+        o.textContent = c.name;
+      }
+      sel.value = get();
+      sel.addEventListener("change", () => set(sel.value));
+    };
+
+    mkSelect("角色 A", () => this.fromId, (v) => (this.fromId = v));
+    mkSelect("角色 B", () => this.toId, (v) => (this.toId = v));
+
+    const input = this.contentEl.createEl("input", { type: "text", cls: "chs-input" });
+    input.placeholder = "关系类型（爱情 / 同盟 / 仇恨 / 师徒 / 自定义…）";
+    input.addEventListener("input", () => (this.type = input.value));
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.submit();
+    });
+
+    const footer = this.contentEl.createDiv("chs-modal-actions");
+    new ButtonComponent(footer).setButtonText("取消").onClick(() => this.close());
+    new ButtonComponent(footer).setButtonText("建立连线").setCta().onClick(() => this.submit());
+    setTimeout(() => input.focus(), 0);
+  }
+
+  private submit(): void {
+    if (!this.fromId || !this.toId || this.fromId === this.toId) {
+      new Notice("请选择两个不同的角色");
+      return;
+    }
+    this.opts.onSubmit(this.fromId, this.toId, this.type);
+    this.close();
   }
 
   onClose(): void {

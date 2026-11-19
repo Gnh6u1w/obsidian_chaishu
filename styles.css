@@ -1392,6 +1392,46 @@ tr.chs-drop-root {
   cursor: grabbing;
 }
 
+/* V2.3: Mermaid-rendered relationship diagram (replaces hand-rolled canvas). */
+.chs-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.chs-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chs-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.chs-legend-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.chs-graph-mermaid {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary);
+  padding: 12px;
+}
+
+.chs-graph-mermaid .mermaid {
+  display: flex;
+  justify-content: center;
+}
+
 .chs-char-title {
   font-weight: 600;
   font-size: 14px;
