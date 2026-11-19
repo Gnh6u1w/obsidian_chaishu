@@ -447,7 +447,7 @@ function buildCharacterPath(book, characterId, dimensionName) {
   const name = (_a = character == null ? void 0 : character.name) != null ? _a : "\u89D2\u8272";
   const parts = [
     bookFolderName(book.bookInfo.title),
-    "\u4EBA\u8BBE",
+    "\u300A\u4EBA\u8BBE\u300B",
     sanitizeFileName(name + "-" + dimensionName) + ".md"
   ];
   return joinVaultPath(storageBase(book), parts);
@@ -1331,9 +1331,14 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     // Multi-select (quick collection) state
     this.selectMode = false;
     this.selectedChapterIds = /* @__PURE__ */ new Set();
-    // Pinch-to-zoom state (V2.0)
+    // Pinch-to-zoom + single-finger manual scroll state (V2.0/V2.2)
     this.pinchDist = 0;
     this.pinchZoom = 1;
+    this.touchStartX = 0;
+    this.touchStartY = 0;
+    this.touchScrollLeft = 0;
+    this.touchScrollTop = 0;
+    this.touchScrolling = false;
     this.plugin = plugin;
   }
   getViewType() {
@@ -1472,10 +1477,6 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     settingsBtn.setAttribute("aria-label", "\u62C6\u4E66\u8BBE\u7F6E");
     (0, import_obsidian3.setIcon)(settingsBtn, "settings");
     settingsBtn.addEventListener("click", () => this.openBookSettingsMenu(settingsBtn));
-    const wallpaperBtn = row.createEl("button", { cls: "chs-icon-btn chs-icon-btn-lg" });
-    wallpaperBtn.setAttribute("aria-label", "\u4E0A\u4F20\u58C1\u7EB8");
-    (0, import_obsidian3.setIcon)(wallpaperBtn, "image");
-    wallpaperBtn.addEventListener("click", () => this.openWallpaper());
   }
   buildEmptyState() {
     const empty = this.wrapEl.createDiv("chs-empty");
@@ -2377,20 +2378,39 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     if (e.touches.length === 2) {
       this.pinchDist = this.touchDistance(e.touches);
       this.pinchZoom = this.zoom;
+      this.touchScrolling = false;
+    } else if (e.touches.length === 1) {
+      this.touchStartX = e.touches[0].clientX;
+      this.touchStartY = e.touches[0].clientY;
+      this.touchScrollLeft = this.matrixScrollEl.scrollLeft;
+      this.touchScrollTop = this.matrixScrollEl.scrollTop;
+      this.touchScrolling = true;
     }
   }
   onPinchMove(e) {
-    if (e.touches.length !== 2 || this.pinchDist <= 0) return;
-    e.preventDefault();
-    const dist = this.touchDistance(e.touches);
-    const z = this.pinchZoom * (dist / this.pinchDist);
-    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 10) / 10));
-    this.applyZoom();
+    if (e.touches.length === 2 && this.pinchDist > 0) {
+      e.preventDefault();
+      const dist = this.touchDistance(e.touches);
+      const z = this.pinchZoom * (dist / this.pinchDist);
+      this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 10) / 10));
+      this.applyZoom();
+      return;
+    }
+    if (e.touches.length === 1 && this.touchScrolling) {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - this.touchStartX;
+      const dy = e.touches[0].clientY - this.touchStartY;
+      this.matrixScrollEl.scrollLeft = this.touchScrollLeft - dx;
+      this.matrixScrollEl.scrollTop = this.touchScrollTop - dy;
+    }
   }
   onPinchEnd(e) {
     if (e.touches.length < 2 && this.pinchDist > 0) {
       this.pinchDist = 0;
       void this.plugin.saveSettings();
+    }
+    if (e.touches.length === 0) {
+      this.touchScrolling = false;
     }
   }
   touchDistance(touches) {
@@ -2823,11 +2843,48 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
 // character-view.ts
 var import_obsidian4 = require("obsidian");
 var MAX_PREVIEW2 = 200;
+var REL_PRESETS = {
+  \u7231\u60C5: "#ef4444",
+  \u7231\u6155: "#ef4444",
+  \u604B\u4EBA: "#ef4444",
+  \u60C5\u4FA3: "#ef4444",
+  \u540C\u76DF: "#3b82f6",
+  \u76DF\u53CB: "#3b82f6",
+  \u670B\u53CB: "#3b82f6",
+  \u5E08\u5F92: "#22c55e",
+  \u4EB2\u60C5: "#ec4899",
+  \u5BB6\u4EBA: "#ec4899",
+  \u4EC7\u6068: "#f97316",
+  \u654C\u5BF9: "#f97316",
+  \u654C\u4EBA: "#f97316",
+  \u4E2D\u7ACB: "#94a3b8"
+};
+function relColor(type) {
+  if (REL_PRESETS[type]) return REL_PRESETS[type];
+  let h = 0;
+  for (let i = 0; i < type.length; i++) h = h * 31 + type.charCodeAt(i) >>> 0;
+  return `hsl(${h % 360}, 62%, 52%)`;
+}
 var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.bookId = "";
     this.observer = null;
+    this.viewMode = "table";
+    // faction drag state
+    this.dragCharId = null;
+    // graph state
+    this.graphColorMode = "faction";
+    this.graphFocusId = "";
+    this.graphNodes = /* @__PURE__ */ new Map();
+    this.graphEdges = [];
+    this.graphPan = { x: 0, y: 0 };
+    this.graphZoom = 1;
+    this.graphRaf = 0;
+    this.graphDragId = null;
+    this.graphLinkFrom = null;
+    this.graphPointers = /* @__PURE__ */ new Map();
+    this.graphPinchDist = 0;
     this.plugin = plugin;
   }
   getViewType() {
@@ -2854,6 +2911,7 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     var _a;
     (_a = this.observer) == null ? void 0 : _a.disconnect();
     this.observer = null;
+    this.stopGraphLoop();
     this.contentEl.empty();
   }
   /** Called by the plugin when re-opening this view for a different book. */
@@ -2877,21 +2935,47 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     row.createSpan("chs-char-title").setText("\u4EBA\u8BBE\u62C6\u89E3 \xB7 " + book.bookInfo.title);
     const toolbar = contentEl.createDiv("chs-toolbar");
     const left = toolbar.createDiv("chs-toolbar-left");
+    const seg = left.createDiv("chs-seg");
+    const tableBtn = seg.createEl("button", {
+      text: "\u8868\u683C\u89C6\u56FE",
+      cls: "chs-btn" + (this.viewMode === "table" ? " chs-btn-primary" : "")
+    });
+    tableBtn.addEventListener("click", () => this.setViewMode("table"));
+    const graphBtn = seg.createEl("button", {
+      text: "\u5173\u7CFB\u56FE\u8C31",
+      cls: "chs-btn" + (this.viewMode === "graph" ? " chs-btn-primary" : "")
+    });
+    graphBtn.addEventListener("click", () => this.setViewMode("graph"));
     const addChar = left.createEl("button", { text: "\uFF0B \u6DFB\u52A0\u89D2\u8272", cls: "chs-btn chs-btn-primary" });
     addChar.addEventListener("click", () => this.addCharacter());
+    const addFaction = left.createEl("button", { text: "\uFF0B \u6DFB\u52A0\u9635\u8425", cls: "chs-btn" });
+    addFaction.addEventListener("click", () => this.addFaction());
     const addDim = left.createEl("button", { text: "\uFF0B \u6DFB\u52A0\u4EBA\u8BBE\u7EF4\u5EA6", cls: "chs-btn" });
     addDim.addEventListener("click", () => this.addCharacterDimension());
     const stats = toolbar.createDiv("chs-stats");
     stats.setText(
-      (book.characters.length || 0) + " \u4E2A\u89D2\u8272 \xB7 " + (book.characterDimensions.length || 0) + " \u4E2A\u4EBA\u8BBE\u7EF4\u5EA6"
+      (book.characters.length || 0) + " \u4E2A\u89D2\u8272 \xB7 " + (book.factions.length || 0) + " \u4E2A\u9635\u8425 \xB7 " + (book.characterDimensions.length || 0) + " \u4E2A\u4EBA\u8BBE\u7EF4\u5EA6"
     );
-    this.buildMatrix(book);
+    if (this.viewMode === "graph") {
+      this.buildGraphView(book);
+    } else {
+      this.buildMatrix(book);
+    }
   }
+  setViewMode(mode) {
+    this.viewMode = mode;
+    this.render();
+  }
+  // ================================================================ table
   buildMatrix(book) {
     const scroll = this.contentEl.createDiv("chs-matrix-scroll");
     const table = scroll.createEl("table");
     table.addClass("chs-matrix", "chs-character-matrix");
     scroll.addEventListener("contextmenu", (e) => this.onContextMenu(e));
+    scroll.addEventListener("dragstart", (e) => this.onCharDragStart(e));
+    scroll.addEventListener("dragover", (e) => this.onCharDragOver(e));
+    scroll.addEventListener("drop", (e) => this.onCharDrop(e));
+    scroll.addEventListener("dragend", () => this.dragCharId = null);
     const colgroup = table.createEl("colgroup");
     const nodeCol = colgroup.createEl("col");
     nodeCol.style.width = "var(--chs-node-w, 200px)";
@@ -2920,21 +3004,19 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     });
     addDimBtn.addEventListener("click", () => this.addCharacterDimension());
     const tbody = table.createEl("tbody");
-    for (const character of book.characters) {
-      const tr = tbody.createEl("tr");
-      const nodeTd = tr.createEl("td", { cls: "chs-node" });
-      nodeTd.dataset.charId = character.id;
-      const icon = nodeTd.createSpan("chs-node-icon");
-      (0, import_obsidian4.setIcon)(icon, "user");
-      nodeTd.createSpan("chs-node-name").setText(character.name);
-      for (const dim of book.characterDimensions) {
-        const td = tr.createEl("td", { cls: "chs-cell chs-character-cell" });
-        td.style.setProperty("--chs-color", dim.color);
-        td.dataset.charCell = character.id;
-        td.dataset.charDim = dim.id;
-        this.renderCharacterCell(td, character, dim);
+    const unassigned = book.characters.filter((c) => !c.factionId);
+    if (unassigned.length > 0 && book.factions.length > 0) {
+      this.renderFactionRow(tbody, book, null, unassigned.length);
+    }
+    for (const character of unassigned) {
+      this.renderCharacterRow(tbody, book, character);
+    }
+    for (const faction of book.factions) {
+      const members = book.characters.filter((c) => c.factionId === faction.id);
+      this.renderFactionRow(tbody, book, faction, members.length);
+      for (const character of members) {
+        this.renderCharacterRow(tbody, book, character);
       }
-      tr.createEl("td", { cls: "chs-cell-filler" });
     }
     const addTr = tbody.createEl("tr", { cls: "chs-add-row" });
     const addTd = addTr.createEl("td", { cls: "chs-node chs-add-chapter" });
@@ -2948,6 +3030,41 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     }
     this.setupObserver(scroll);
     table.addEventListener("click", (e) => this.onClick(e));
+  }
+  /** A faction header row spanning the whole table width (drag-drop target). */
+  renderFactionRow(tbody, book, faction, count) {
+    var _a, _b;
+    const tr = tbody.createEl("tr", { cls: "chs-faction-row" });
+    const td = tr.createEl("td", { cls: "chs-faction-cell" });
+    td.setAttribute("colspan", String(book.characterDimensions.length + 2));
+    td.dataset.factionId = (_a = faction == null ? void 0 : faction.id) != null ? _a : "";
+    const dot = td.createSpan("chs-faction-dot");
+    dot.style.backgroundColor = (_b = faction == null ? void 0 : faction.color) != null ? _b : "var(--text-faint)";
+    td.createSpan("chs-faction-name").setText(faction ? faction.name : "\u672A\u5206\u914D\u9635\u8425");
+    td.createSpan("chs-faction-count").setText(String(count) + " \u4EBA");
+    td.addEventListener("contextmenu", (e) => {
+      if (faction) {
+        e.preventDefault();
+        this.buildFactionMenu(faction.id).showAtMouseEvent(e);
+      }
+    });
+  }
+  renderCharacterRow(tbody, book, character) {
+    const tr = tbody.createEl("tr");
+    const nodeTd = tr.createEl("td", { cls: "chs-node" });
+    nodeTd.draggable = true;
+    nodeTd.dataset.charId = character.id;
+    const icon = nodeTd.createSpan("chs-node-icon");
+    (0, import_obsidian4.setIcon)(icon, "user");
+    nodeTd.createSpan("chs-node-name").setText(character.name);
+    for (const dim of book.characterDimensions) {
+      const td = tr.createEl("td", { cls: "chs-cell chs-character-cell" });
+      td.style.setProperty("--chs-color", dim.color);
+      td.dataset.charCell = character.id;
+      td.dataset.charDim = dim.id;
+      this.renderCharacterCell(td, character, dim);
+    }
+    tr.createEl("td", { cls: "chs-cell-filler" });
   }
   setupObserver(scroll) {
     var _a;
@@ -3042,13 +3159,76 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
       this.buildCharacterMenu(nodeEl.dataset.charId).showAtMouseEvent(e);
     }
   }
+  // ------------------------------------------------------- faction drag
+  onCharDragStart(e) {
+    const t = e.target.closest("[data-char-id]");
+    if (!t) return;
+    this.dragCharId = t.dataset.charId;
+    if (e.dataTransfer) e.dataTransfer.setData("text/plain", this.dragCharId);
+  }
+  onCharDragOver(e) {
+    const factionEl = e.target.closest("[data-faction-id]");
+    this.contentEl.querySelectorAll(".chs-faction-cell.chs-drop-target").forEach(
+      (el) => el.removeClass("chs-drop-target")
+    );
+    if (factionEl && this.dragCharId) {
+      factionEl.addClass("chs-drop-target");
+      e.preventDefault();
+    }
+  }
+  onCharDrop(e) {
+    var _a;
+    const factionEl = e.target.closest("[data-faction-id]");
+    this.contentEl.querySelectorAll(".chs-faction-cell.chs-drop-target").forEach(
+      (el) => el.removeClass("chs-drop-target")
+    );
+    if (factionEl && this.dragCharId) {
+      e.preventDefault();
+      this.assignFaction(this.dragCharId, (_a = factionEl.dataset.factionId) != null ? _a : "");
+    }
+    this.dragCharId = null;
+  }
+  assignFaction(charId, factionId) {
+    const book = this.book;
+    if (!book) return;
+    const character = book.characters.find((c) => c.id === charId);
+    if (!character) return;
+    character.factionId = factionId;
+    void this.plugin.saveSettings();
+    this.render();
+  }
   buildCharacterMenu(charId) {
     const menu = new import_obsidian4.Menu();
     menu.addItem(
       (i) => i.setTitle("\u91CD\u547D\u540D").setIcon("pencil").onClick(() => this.renameCharacter(charId))
     );
+    const book = this.book;
+    if (book && book.factions.length > 0) {
+      menu.addItem((i) => i.setTitle("\u79FB\u52A8\u5230\u9635\u8425").setIcon("users").setDisabled(true));
+      menu.addItem(
+        (i) => i.setTitle("\u3000\u3000\u672A\u5206\u914D").onClick(() => this.assignFaction(charId, ""))
+      );
+      for (const f of book.factions) {
+        menu.addItem(
+          (i) => i.setTitle("\u3000\u3000" + f.name).onClick(() => this.assignFaction(charId, f.id))
+        );
+      }
+    }
     menu.addItem(
       (i) => i.setTitle("\u5220\u9664\u89D2\u8272").setIcon("trash").onClick(() => this.deleteCharacter(charId))
+    );
+    return menu;
+  }
+  buildFactionMenu(factionId) {
+    const menu = new import_obsidian4.Menu();
+    menu.addItem(
+      (i) => i.setTitle("\u91CD\u547D\u540D\u9635\u8425").setIcon("pencil").onClick(() => this.renameFaction(factionId))
+    );
+    menu.addItem(
+      (i) => i.setTitle("\u66F4\u6362\u989C\u8272").setIcon("palette").onClick(() => this.changeFactionColor(factionId))
+    );
+    menu.addItem(
+      (i) => i.setTitle("\u5220\u9664\u9635\u8425").setIcon("trash").onClick(() => this.deleteFaction(factionId))
     );
     return menu;
   }
@@ -3099,6 +3279,7 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
       workspace.setActiveLeaf(leaf, { focus: true });
     }
   }
+  // --------------------------------------------------------- characters
   addCharacter() {
     const book = this.book;
     if (!book) return;
@@ -3108,7 +3289,7 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
       confirmText: "\u6DFB\u52A0",
       onConfirm: (name) => {
         const n = sanitizeFileName(name) || "\u89D2\u8272";
-        book.characters.push({ id: uid("p"), name: n });
+        book.characters.push({ id: uid("p"), name: n, factionId: "" });
         void this.plugin.saveSettings();
         this.render();
       }
@@ -3168,12 +3349,95 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
       confirmText: "\u5220\u9664",
       danger: true,
       onConfirm: async () => {
+        var _a;
         book.characters = book.characters.filter((c) => c.id !== charId);
+        book.relationships = ((_a = book.relationships) != null ? _a : []).filter(
+          (r) => r.from !== charId && r.to !== charId
+        );
         await this.plugin.saveSettings();
         this.render();
       }
     }).open();
   }
+  // ------------------------------------------------------------ factions
+  addFaction() {
+    const book = this.book;
+    if (!book) return;
+    new PromptModal(this.app, {
+      title: "\u6DFB\u52A0\u9635\u8425",
+      placeholder: "\u9635\u8425\u540D\u79F0\uFF08\u5982\uFF1A\u6B63\u9053 / \u9B54\u9053 / \u4E2D\u7ACB\uFF09",
+      confirmText: "\u6DFB\u52A0",
+      onConfirm: (name) => {
+        const n = sanitizeFileName(name) || "\u9635\u8425";
+        const colors = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6", "#a855f7", "#ec4899", "#14b8a6"];
+        book.factions.push({
+          id: uid("f"),
+          name: n,
+          color: colors[(book.factions.length || 0) % colors.length]
+        });
+        void this.plugin.saveSettings();
+        this.render();
+      }
+    }).open();
+  }
+  renameFaction(factionId) {
+    const book = this.book;
+    if (!book) return;
+    const faction = book.factions.find((f) => f.id === factionId);
+    if (!faction) return;
+    new PromptModal(this.app, {
+      title: "\u91CD\u547D\u540D\u9635\u8425",
+      placeholder: "\u9635\u8425\u540D\u79F0",
+      initial: faction.name,
+      confirmText: "\u4FDD\u5B58",
+      onConfirm: (name) => {
+        const n = sanitizeFileName(name) || faction.name;
+        faction.name = n;
+        void this.plugin.saveSettings();
+        this.render();
+      }
+    }).open();
+  }
+  changeFactionColor(factionId) {
+    const book = this.book;
+    if (!book) return;
+    const faction = book.factions.find((f) => f.id === factionId);
+    if (!faction) return;
+    const colors = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6", "#a855f7", "#ec4899", "#14b8a6"];
+    const menu = new import_obsidian4.Menu();
+    for (const c of colors) {
+      menu.addItem((i) => {
+        i.setTitle(c).setIcon(faction.color === c ? "check" : "circle");
+        i.onClick(() => {
+          faction.color = c;
+          void this.plugin.saveSettings();
+          this.render();
+        });
+      });
+    }
+    menu.showAtPosition({ x: window.innerWidth / 2 - 100, y: window.innerHeight / 2 - 100 });
+  }
+  deleteFaction(factionId) {
+    const book = this.book;
+    if (!book) return;
+    const faction = book.factions.find((f) => f.id === factionId);
+    if (!faction) return;
+    new ConfirmModal(this.app, {
+      title: "\u5220\u9664\u9635\u8425",
+      message: "\u5C06\u5220\u9664\u9635\u8425\u300C" + faction.name + "\u300D\uFF0C\u5176\u4E0B\u89D2\u8272\u4F1A\u53D8\u4E3A\u300C\u672A\u5206\u914D\u300D\u3002\uFF08\u89D2\u8272\u7B14\u8BB0\u4FDD\u7559\uFF09",
+      confirmText: "\u5220\u9664",
+      danger: true,
+      onConfirm: async () => {
+        book.factions = book.factions.filter((f) => f.id !== factionId);
+        for (const c of book.characters) {
+          if (c.factionId === factionId) c.factionId = "";
+        }
+        await this.plugin.saveSettings();
+        this.render();
+      }
+    }).open();
+  }
+  // ------------------------------------------------------- dimensions
   addCharacterDimension() {
     const book = this.book;
     if (!book) return;
@@ -3218,6 +3482,414 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
             this.render();
           }
         }).open();
+      }
+    }).open();
+  }
+  // ================================================================ graph
+  buildGraphView(book) {
+    const wrap = this.contentEl.createDiv("chs-graph-wrap");
+    const controls = wrap.createDiv("chs-graph-controls");
+    controls.createSpan("chs-graph-hint").setText("\u62D6\u62FD\u8282\u70B9\u79FB\u52A8 \xB7 \u6EDA\u8F6E/\u53CC\u6307\u7F29\u653E \xB7 \u62D6\u62FD\u4E24\u8282\u70B9\u8FDE\u7EBF\u5EFA\u5173\u7CFB \xB7 \u70B9\u51FB\u8282\u70B9\u805A\u7126");
+    const seg = controls.createDiv("chs-seg");
+    const factionBtn = seg.createEl("button", {
+      text: "\u9635\u8425\u7740\u8272",
+      cls: "chs-btn chs-btn-sm" + (this.graphColorMode === "faction" ? " chs-btn-primary" : "")
+    });
+    factionBtn.addEventListener("click", () => {
+      this.graphColorMode = "faction";
+      this.render();
+    });
+    const relBtn = seg.createEl("button", {
+      text: "\u5173\u7CFB\u5708\u7740\u8272",
+      cls: "chs-btn chs-btn-sm" + (this.graphColorMode === "relation" ? " chs-btn-primary" : "")
+    });
+    relBtn.addEventListener("click", () => {
+      this.graphColorMode = "relation";
+      this.render();
+    });
+    const canvas = wrap.createEl("canvas");
+    canvas.addClass("chs-graph-canvas");
+    this.graphCanvas = canvas;
+    this.graphCtx = canvas.getContext("2d");
+    this.computeGraph(book);
+    this.initGraphPositions(book);
+    canvas.addEventListener("pointerdown", (e) => this.onGraphPointerDown(e));
+    canvas.addEventListener("pointermove", (e) => this.onGraphPointerMove(e));
+    canvas.addEventListener("pointerup", (e) => this.onGraphPointerUp(e));
+    canvas.addEventListener("pointercancel", (e) => this.onGraphPointerUp(e));
+    canvas.addEventListener("wheel", (e) => this.onGraphWheel(e), { passive: false });
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    this.resizeGraphCanvas();
+    this.startGraphLoop(book);
+  }
+  resizeGraphCanvas() {
+    var _a, _b, _c;
+    const canvas = this.graphCanvas;
+    if (!canvas) return;
+    const rect = (_a = canvas.parentElement) == null ? void 0 : _a.getBoundingClientRect();
+    const w = Math.max(320, (_b = rect == null ? void 0 : rect.width) != null ? _b : 600);
+    const h = Math.max(320, (_c = rect == null ? void 0 : rect.height) != null ? _c : 480);
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    this.graphCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  /** Build the edge list: explicit (manual) + implicit (Obsidian wikilinks). */
+  computeGraph(book) {
+    var _a, _b, _c, _d;
+    const edges = [];
+    const seen = /* @__PURE__ */ new Set();
+    const addEdge = (from, to, type, explicit) => {
+      if (!from || !to || from === to) return;
+      const key = [from, to].sort().join("|") + "|" + (explicit ? "e" : "i");
+      if (seen.has(key)) return;
+      seen.add(key);
+      edges.push({ from, to, type, explicit });
+    };
+    for (const r of (_a = book.relationships) != null ? _a : []) {
+      addEdge(r.from, r.to, r.type, true);
+    }
+    const characters = book.characters;
+    const byName = /* @__PURE__ */ new Map();
+    for (const c of characters) byName.set(c.name, c);
+    const matchTarget = (linkBase) => {
+      const exact = byName.get(linkBase);
+      if (exact) return exact;
+      for (const c of characters) {
+        if (linkBase.startsWith(c.name + "-")) return c;
+      }
+      return null;
+    };
+    for (const char of characters) {
+      for (const dim of book.characterDimensions) {
+        const cell = book.characterCells[cellKey(char.id, dim.id)];
+        if (!(cell == null ? void 0 : cell.filePath)) continue;
+        const f = this.app.vault.getAbstractFileByPath(cell.filePath);
+        if (!(f instanceof import_obsidian4.TFile)) continue;
+        const links = (_c = (_b = this.app.metadataCache.getFileCache(f)) == null ? void 0 : _b.links) != null ? _c : [];
+        for (const l of links) {
+          const base = (_d = (l.link || "").split("/").pop()) != null ? _d : "";
+          const target = matchTarget(base);
+          if (target) addEdge(char.id, target.id, "\u5173\u8054", false);
+        }
+      }
+    }
+    this.graphEdges = edges;
+  }
+  initGraphPositions(book) {
+    this.graphNodes.clear();
+    const n = book.characters.length;
+    const radius = Math.max(120, n * 22);
+    book.characters.forEach((c, i) => {
+      const angle = i / Math.max(1, n) * Math.PI * 2;
+      this.graphNodes.set(c.id, {
+        x: Math.cos(angle) * radius,
+        y: Math.sin(angle) * radius,
+        vx: 0,
+        vy: 0
+      });
+    });
+    this.graphPan = { x: 0, y: 0 };
+    this.graphZoom = 1;
+    this.graphFocusId = "";
+  }
+  startGraphLoop(book) {
+    this.stopGraphLoop();
+    const step = () => {
+      this.graphPhysics(book);
+      this.graphDraw(book);
+      this.graphRaf = requestAnimationFrame(step);
+    };
+    this.graphRaf = requestAnimationFrame(step);
+  }
+  stopGraphLoop() {
+    if (this.graphRaf) {
+      cancelAnimationFrame(this.graphRaf);
+      this.graphRaf = 0;
+    }
+  }
+  graphPhysics(book) {
+    var _a, _b;
+    const nodes = this.graphNodes;
+    const ids = [...nodes.keys()];
+    const W = ((_a = this.graphCanvas) == null ? void 0 : _a.clientWidth) || 600;
+    const H = ((_b = this.graphCanvas) == null ? void 0 : _b.clientHeight) || 480;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = nodes.get(ids[i]);
+        const b = nodes.get(ids[j]);
+        let dx = a.x - b.x;
+        let dy = a.y - b.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 1) {
+          dx = Math.random() - 0.5;
+          dy = Math.random() - 0.5;
+          d2 = dx * dx + dy * dy;
+        }
+        const d = Math.sqrt(d2);
+        const force = 900 / d2;
+        const fx = dx / d * force;
+        const fy = dy / d * force;
+        a.vx += fx;
+        a.vy += fy;
+        b.vx -= fx;
+        b.vy -= fy;
+      }
+    }
+    for (const e of this.graphEdges) {
+      const a = nodes.get(e.from);
+      const b = nodes.get(e.to);
+      if (!a || !b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const target = 110;
+      const force = (d - target) * 0.02;
+      const fx = dx / d * force;
+      const fy = dy / d * force;
+      a.vx += fx;
+      a.vy += fy;
+      b.vx -= fx;
+      b.vy -= fy;
+    }
+    for (const id of ids) {
+      const n = nodes.get(id);
+      if (this.graphDragId === id) continue;
+      n.vx += -n.x * 4e-3;
+      n.vy += -n.y * 4e-3;
+    }
+    for (const id of ids) {
+      const n = nodes.get(id);
+      if (this.graphDragId === id) continue;
+      n.vx *= 0.82;
+      n.vy *= 0.82;
+      n.x += n.vx;
+      n.y += n.vy;
+      n.x = Math.max(-W, Math.min(W, n.x));
+      n.y = Math.max(-H, Math.min(H, n.y));
+    }
+  }
+  toScreen(wx, wy) {
+    var _a, _b;
+    const W = ((_a = this.graphCanvas) == null ? void 0 : _a.clientWidth) || 600;
+    const H = ((_b = this.graphCanvas) == null ? void 0 : _b.clientHeight) || 480;
+    return {
+      x: wx * this.graphZoom + this.graphPan.x + W / 2,
+      y: wy * this.graphZoom + this.graphPan.y + H / 2
+    };
+  }
+  graphDraw(book) {
+    var _a, _b;
+    const ctx = this.graphCtx;
+    if (!ctx) return;
+    const W = ((_a = this.graphCanvas) == null ? void 0 : _a.clientWidth) || 600;
+    const H = ((_b = this.graphCanvas) == null ? void 0 : _b.clientHeight) || 480;
+    ctx.clearRect(0, 0, W, H);
+    const factionById = /* @__PURE__ */ new Map();
+    for (const f of book.factions) factionById.set(f.id, f);
+    const charById = /* @__PURE__ */ new Map();
+    for (const c of book.characters) charById.set(c.id, c);
+    const nodeColor = (char) => {
+      var _a2;
+      const f = char.factionId ? factionById.get(char.factionId) : null;
+      return (_a2 = f == null ? void 0 : f.color) != null ? _a2 : "#8b9bb4";
+    };
+    for (const e of this.graphEdges) {
+      const a = this.graphNodes.get(e.from);
+      const b = this.graphNodes.get(e.to);
+      if (!a || !b) continue;
+      const pa = this.toScreen(a.x, a.y);
+      const pb = this.toScreen(b.x, b.y);
+      const focused = this.graphFocusId && (e.from === this.graphFocusId || e.to === this.graphFocusId);
+      ctx.beginPath();
+      ctx.moveTo(pa.x, pa.y);
+      ctx.lineTo(pb.x, pb.y);
+      if (e.explicit) {
+        ctx.strokeStyle = this.graphColorMode === "relation" ? relColor(e.type) : relColor(e.type);
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+      } else {
+        ctx.strokeStyle = "rgba(140, 156, 178, 0.7)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+      }
+      ctx.globalAlpha = this.graphFocusId && !focused ? 0.15 : 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+    for (const char of book.characters) {
+      const n = this.graphNodes.get(char.id);
+      if (!n) continue;
+      const p = this.toScreen(n.x, n.y);
+      const r = 16 / this.graphZoom < 6 ? 6 : Math.max(8, Math.min(20, 16 / this.graphZoom * 1.2));
+      const color = nodeColor(char);
+      const focused = char.id === this.graphFocusId;
+      const dimmed = this.graphFocusId && !focused && !this.isAdjacent(char.id, this.graphFocusId);
+      ctx.globalAlpha = dimmed ? 0.35 : 1;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = focused ? 3 : 1.5;
+      ctx.strokeStyle = focused ? "#ffffff" : "rgba(0,0,0,0.35)";
+      ctx.stroke();
+      ctx.font = `${Math.round(13 / Math.sqrt(this.graphZoom))}px -apple-system, system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillStyle = "var(--text-normal)";
+      ctx.fillText(char.name, p.x, p.y + r + 14);
+      ctx.globalAlpha = 1;
+    }
+  }
+  isAdjacent(id, focusId) {
+    for (const e of this.graphEdges) {
+      if (e.from === id && e.to === focusId || e.to === id && e.from === focusId) return true;
+    }
+    return false;
+  }
+  // ---- graph pointer interaction ----
+  graphScreenToWorld(sx, sy) {
+    var _a, _b;
+    const W = ((_a = this.graphCanvas) == null ? void 0 : _a.clientWidth) || 600;
+    const H = ((_b = this.graphCanvas) == null ? void 0 : _b.clientHeight) || 480;
+    return {
+      x: (sx - this.graphPan.x - W / 2) / this.graphZoom,
+      y: (sy - this.graphPan.y - H / 2) / this.graphZoom
+    };
+  }
+  hitTestNode(sx, sy) {
+    const world = this.graphScreenToWorld(sx, sy);
+    let best = null;
+    let bestD = Infinity;
+    for (const [id, n] of this.graphNodes) {
+      const dx = n.x - world.x;
+      const dy = n.y - world.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < 24 / this.graphZoom && d < bestD) {
+        bestD = d;
+        best = id;
+      }
+    }
+    return best;
+  }
+  onGraphPointerDown(e) {
+    const rect = this.graphCanvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    this.graphPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    this.graphCanvas.setPointerCapture(e.pointerId);
+    if (this.graphPointers.size === 2) {
+      const pts = [...this.graphPointers.values()];
+      this.graphPinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      this.graphDragId = null;
+      return;
+    }
+    const hit = this.hitTestNode(sx, sy);
+    if (hit) {
+      this.graphDragId = hit;
+      this.graphLinkFrom = hit;
+      this.graphFocusId = hit;
+    }
+  }
+  onGraphPointerMove(e) {
+    if (!this.graphPointers.has(e.pointerId)) return;
+    const rect = this.graphCanvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const prev = this.graphPointers.get(e.pointerId);
+    this.graphPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.graphPointers.size === 2) {
+      e.preventDefault();
+      const pts = [...this.graphPointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (this.graphPinchDist > 0) {
+        const factor = dist / this.graphPinchDist;
+        this.graphZoom = Math.min(4, Math.max(0.25, this.graphZoom * factor));
+      }
+      this.graphPinchDist = dist;
+      return;
+    }
+    const dx = e.clientX - prev.x;
+    const dy = e.clientY - prev.y;
+    if (this.graphDragId) {
+      const world = this.graphScreenToWorld(sx, sy);
+      const n = this.graphNodes.get(this.graphDragId);
+      if (n) {
+        n.x = world.x;
+        n.y = world.y;
+        n.vx = 0;
+        n.vy = 0;
+      }
+    } else {
+      this.graphPan.x += dx;
+      this.graphPan.y += dy;
+    }
+  }
+  onGraphPointerUp(e) {
+    const rect = this.graphCanvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    if (this.graphPointers.size === 2) {
+      this.graphPointers.delete(e.pointerId);
+      this.graphPinchDist = 0;
+      return;
+    }
+    this.graphPointers.delete(e.pointerId);
+    if (this.graphDragId) {
+      const released = this.hitTestNode(sx, sy);
+      if (released && released !== this.graphDragId) {
+        const from = this.graphDragId;
+        const to = released;
+        this.graphDragId = null;
+        this.graphLinkFrom = null;
+        this.promptRelationship(from, to);
+        return;
+      }
+      this.graphDragId = null;
+      this.graphLinkFrom = null;
+    } else {
+      if (!this.graphDragId && Math.abs(e.movementX) < 2 && Math.abs(e.movementY) < 2) {
+        const hit = this.hitTestNode(sx, sy);
+        if (!hit) this.graphFocusId = "";
+      }
+    }
+  }
+  onGraphWheel(e) {
+    var _a, _b;
+    e.preventDefault();
+    const rect = this.graphCanvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    const newZoom = Math.min(4, Math.max(0.25, this.graphZoom * factor));
+    const worldBefore = this.graphScreenToWorld(sx, sy);
+    this.graphZoom = newZoom;
+    const W = ((_a = this.graphCanvas) == null ? void 0 : _a.clientWidth) || 600;
+    const H = ((_b = this.graphCanvas) == null ? void 0 : _b.clientHeight) || 480;
+    this.graphPan.x = sx - W / 2 - worldBefore.x * this.graphZoom;
+    this.graphPan.y = sy - H / 2 - worldBefore.y * this.graphZoom;
+  }
+  promptRelationship(from, to) {
+    const book = this.book;
+    if (!book) return;
+    const a = book.characters.find((c) => c.id === from);
+    const b = book.characters.find((c) => c.id === to);
+    if (!a || !b) return;
+    new PromptModal(this.app, {
+      title: "\u5EFA\u7ACB\u5173\u7CFB",
+      placeholder: "\u5173\u7CFB\u7C7B\u578B\uFF08\u7231\u60C5 / \u540C\u76DF / \u4EC7\u6068 / \u5E08\u5F92 / \u81EA\u5B9A\u4E49\u2026\uFF09",
+      confirmText: "\u5EFA\u7ACB\u8FDE\u7EBF",
+      onConfirm: (type) => {
+        var _a;
+        const t = sanitizeFileName(type) || "\u5173\u8054";
+        book.relationships = ((_a = book.relationships) != null ? _a : []).filter(
+          (r) => !(r.from === from && r.to === to || r.from === to && r.to === from)
+        );
+        book.relationships.push({ id: uid("r"), from, to, type: t, explicit: true });
+        void this.plugin.saveSettings();
+        this.render();
       }
     }).open();
   }
@@ -3725,7 +4397,9 @@ var ChaiShuMatrixPlugin = class extends import_obsidian7.Plugin {
       cells: {},
       characters: [],
       characterDimensions: [],
-      characterCells: {}
+      characterCells: {},
+      factions: [],
+      relationships: []
     };
     settings.books.push(book);
     settings.activeBookId = book.id;
@@ -3887,7 +4561,8 @@ var ChaiShuMatrixPlugin = class extends import_obsidian7.Plugin {
       var _a2, _b2;
       return {
         id: (_a2 = c == null ? void 0 : c.id) != null ? _a2 : uid("p"),
-        name: sanitizeFileName((_b2 = c == null ? void 0 : c.name) != null ? _b2 : "\u89D2\u8272")
+        name: sanitizeFileName((_b2 = c == null ? void 0 : c.name) != null ? _b2 : "\u89D2\u8272"),
+        factionId: typeof (c == null ? void 0 : c.factionId) === "string" ? c.factionId : ""
       };
     }) : [];
     const characterDimensions = Array.isArray(b.characterDimensions) ? b.characterDimensions.map((d) => {
@@ -3901,6 +4576,24 @@ var ChaiShuMatrixPlugin = class extends import_obsidian7.Plugin {
       };
     }) : [];
     const characterCells = b.characterCells && typeof b.characterCells === "object" ? b.characterCells : {};
+    const factions = Array.isArray(b.factions) ? b.factions.map((f) => {
+      var _a2, _b2;
+      return {
+        id: (_a2 = f == null ? void 0 : f.id) != null ? _a2 : uid("f"),
+        name: sanitizeFileName((_b2 = f == null ? void 0 : f.name) != null ? _b2 : "\u9635\u8425"),
+        color: typeof (f == null ? void 0 : f.color) === "string" && f.color ? f.color : DIMENSION_COLORS[0]
+      };
+    }) : [];
+    const relationships = Array.isArray(b.relationships) ? b.relationships.map((r) => {
+      var _a2;
+      return {
+        id: (_a2 = r == null ? void 0 : r.id) != null ? _a2 : uid("r"),
+        from: typeof (r == null ? void 0 : r.from) === "string" ? r.from : "",
+        to: typeof (r == null ? void 0 : r.to) === "string" ? r.to : "",
+        type: typeof (r == null ? void 0 : r.type) === "string" && r.type ? r.type : "\u5173\u7CFB",
+        explicit: (r == null ? void 0 : r.explicit) !== false
+      };
+    }) : [];
     return {
       id: (_p = b.id) != null ? _p : uid("book"),
       bookInfo,
@@ -3910,7 +4603,9 @@ var ChaiShuMatrixPlugin = class extends import_obsidian7.Plugin {
       cells,
       characters,
       characterDimensions,
-      characterCells
+      characterCells,
+      factions,
+      relationships
     };
   }
   normalizeNode(n) {

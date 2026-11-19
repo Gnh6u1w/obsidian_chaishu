@@ -50,10 +50,32 @@ export interface CellData {
   hasContent: boolean;
 }
 
+/** A faction (阵营) that groups characters — like 卷/单元 on the Y axis. */
+export interface FactionData {
+  id: string;
+  name: string;
+  color: string;
+}
+
 /** A character (row) in the 人设拆解 sub-matrix. */
 export interface CharacterData {
   id: string;
   name: string;
+  /** Faction id the character belongs to, "" = unassigned. */
+  factionId: string;
+}
+
+/** A relationship edge in the 角色关系图谱. */
+export interface RelationshipData {
+  id: string;
+  /** Source character id. */
+  from: string;
+  /** Target character id. */
+  to: string;
+  /** Relationship type label (爱情/同盟/仇恨/中立/…) — free text. */
+  type: string;
+  /** true = manually created (solid), false = auto-derived from wikilinks (dashed). */
+  explicit: boolean;
 }
 
 export interface BookData {
@@ -68,6 +90,10 @@ export interface BookData {
   characters: CharacterData[];
   characterDimensions: Dimension[];
   characterCells: Record<string, CellData>;
+  /** 阵营 (V2.2): groups of characters on the Y axis. */
+  factions: FactionData[];
+  /** 角色关系图谱 edges (V2.2): explicit + auto-derived relationships. */
+  relationships: RelationshipData[];
 }
 
 export interface ImportRequest {

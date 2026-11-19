@@ -493,7 +493,7 @@ export async function createSummaryNote(
 // -------------------------------------------------- 人设拆解 notes (V2.1)
 
 /** Archive path for a character dimension note:
- *  存放位置/《书名》/人设/<角色名>-<人设维度>.md */
+ *  存放位置/《书名》/《人设》/<角色名>-<人设维度>.md */
 export function buildCharacterPath(
   book: BookData,
   characterId: string,
@@ -503,7 +503,7 @@ export function buildCharacterPath(
   const name = character?.name ?? "角色";
   const parts: string[] = [
     bookFolderName(book.bookInfo.title),
-    "人设",
+    "《人设》",
     sanitizeFileName(name + "-" + dimensionName) + ".md",
   ];
   return joinVaultPath(storageBase(book), parts);

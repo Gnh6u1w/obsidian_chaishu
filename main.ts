@@ -258,6 +258,8 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       characters: [],
       characterDimensions: [],
       characterCells: {},
+      factions: [],
+      relationships: [],
     };
     settings.books.push(book);
     settings.activeBookId = book.id;
@@ -454,6 +456,7 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       ? b.characters.map((c: any) => ({
           id: c?.id ?? uid("p"),
           name: sanitizeFileName(c?.name ?? "角色"),
+          factionId: typeof c?.factionId === "string" ? c.factionId : "",
         }))
       : [];
 
@@ -470,6 +473,24 @@ export default class ChaiShuMatrixPlugin extends Plugin {
     const characterCells: Record<string, CellData> =
       b.characterCells && typeof b.characterCells === "object" ? b.characterCells : {};
 
+    const factions = Array.isArray(b.factions)
+      ? b.factions.map((f: any) => ({
+          id: f?.id ?? uid("f"),
+          name: sanitizeFileName(f?.name ?? "阵营"),
+          color: typeof f?.color === "string" && f.color ? f.color : DIMENSION_COLORS[0],
+        }))
+      : [];
+
+    const relationships = Array.isArray(b.relationships)
+      ? b.relationships.map((r: any) => ({
+          id: r?.id ?? uid("r"),
+          from: typeof r?.from === "string" ? r.from : "",
+          to: typeof r?.to === "string" ? r.to : "",
+          type: typeof r?.type === "string" && r.type ? r.type : "关系",
+          explicit: r?.explicit !== false,
+        }))
+      : [];
+
     return {
       id: b.id ?? uid("book"),
       bookInfo,
@@ -480,6 +501,8 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       characters,
       characterDimensions,
       characterCells,
+      factions,
+      relationships,
     };
   }
 

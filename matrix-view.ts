@@ -135,9 +135,14 @@ export class ChaiShuMatrixView extends ItemView {
   private selectedChapterIds = new Set<string>();
   private selectBarEl!: HTMLElement;
   private selectCountEl!: HTMLElement;
-  // Pinch-to-zoom state (V2.0)
+  // Pinch-to-zoom + single-finger manual scroll state (V2.0/V2.2)
   private pinchDist = 0;
   private pinchZoom = 1;
+  private touchStartX = 0;
+  private touchStartY = 0;
+  private touchScrollLeft = 0;
+  private touchScrollTop = 0;
+  private touchScrolling = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: ChaiShuMatrixPlugin) {
     super(leaf);
@@ -297,11 +302,6 @@ export class ChaiShuMatrixView extends ItemView {
     settingsBtn.setAttribute("aria-label", "拆书设置");
     setIcon(settingsBtn, "settings");
     settingsBtn.addEventListener("click", () => this.openBookSettingsMenu(settingsBtn));
-
-    const wallpaperBtn = row.createEl("button", { cls: "chs-icon-btn chs-icon-btn-lg" });
-    wallpaperBtn.setAttribute("aria-label", "上传壁纸");
-    setIcon(wallpaperBtn, "image");
-    wallpaperBtn.addEventListener("click", () => this.openWallpaper());
   }
 
   private buildEmptyState(): void {
@@ -1344,22 +1344,42 @@ export class ChaiShuMatrixView extends ItemView {
     if (e.touches.length === 2) {
       this.pinchDist = this.touchDistance(e.touches);
       this.pinchZoom = this.zoom;
+      this.touchScrolling = false;
+    } else if (e.touches.length === 1) {
+      // begin manual single-finger scroll (touch-action:none disables native pan)
+      this.touchStartX = e.touches[0].clientX;
+      this.touchStartY = e.touches[0].clientY;
+      this.touchScrollLeft = this.matrixScrollEl.scrollLeft;
+      this.touchScrollTop = this.matrixScrollEl.scrollTop;
+      this.touchScrolling = true;
     }
   }
 
   private onPinchMove(e: TouchEvent): void {
-    if (e.touches.length !== 2 || this.pinchDist <= 0) return;
-    e.preventDefault();
-    const dist = this.touchDistance(e.touches);
-    const z = this.pinchZoom * (dist / this.pinchDist);
-    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 10) / 10));
-    this.applyZoom();
+    if (e.touches.length === 2 && this.pinchDist > 0) {
+      e.preventDefault();
+      const dist = this.touchDistance(e.touches);
+      const z = this.pinchZoom * (dist / this.pinchDist);
+      this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 10) / 10));
+      this.applyZoom();
+      return;
+    }
+    if (e.touches.length === 1 && this.touchScrolling) {
+      e.preventDefault();
+      const dx = e.touches[0].clientX - this.touchStartX;
+      const dy = e.touches[0].clientY - this.touchStartY;
+      this.matrixScrollEl.scrollLeft = this.touchScrollLeft - dx;
+      this.matrixScrollEl.scrollTop = this.touchScrollTop - dy;
+    }
   }
 
   private onPinchEnd(e: TouchEvent): void {
     if (e.touches.length < 2 && this.pinchDist > 0) {
       this.pinchDist = 0;
       void this.plugin.saveSettings();
+    }
+    if (e.touches.length === 0) {
+      this.touchScrolling = false;
     }
   }
 

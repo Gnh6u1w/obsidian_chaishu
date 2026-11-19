@@ -340,7 +340,9 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  touch-action: pan-x pan-y;
+  /* V2.2: none — single-finger pan + two-finger pinch are handled in JS
+     (onPinchStart/Move/End) so Obsidian's global pinch-zoom never steals the gesture. */
+  touch-action: none;
   border: 1px solid var(--background-modifier-border);
   border-radius: 10px;
   background: var(--background-primary);
@@ -1250,5 +1252,133 @@ tr.chs-drop-root {
   padding: 20px;
   text-align: center;
   color: var(--text-muted);
+}
+
+/* ================================================================ V2.2.1
+   Segmented view switch (表格视图 / 关系图谱视图 / 阵营着色 / 关系圈着色). */
+.chs-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+
+.chs-seg .chs-btn {
+  border: none;
+  background: transparent;
+  padding: 4px 12px;
+  border-radius: 6px;
+}
+
+.chs-seg .chs-btn.chs-btn-primary {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+/* ---- faction (阵营) grouping rows in the character table ---- */
+.chs-faction-row {
+  background: var(--background-secondary-alt);
+}
+
+.chs-faction-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: default;
+  font-weight: 600;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.chs-faction-cell.chs-drop-target {
+  outline: 2px dashed var(--interactive-accent);
+  outline-offset: -2px;
+  background: var(--background-modifier-hover);
+}
+
+.chs-faction-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.chs-faction-name {
+  font-size: 13px;
+}
+
+.chs-faction-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* ---- character relationship graph ---- */
+.chs-graph-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 8px;
+}
+
+.chs-graph-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.chs-graph-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chs-graph-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary);
+  touch-action: none;
+  cursor: grab;
+}
+
+.chs-graph-canvas:active {
+  cursor: grabbing;
+}
+
+.chs-char-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-normal);
+}
+
+/* ---- mobile adaptations for the new V2.2.1 controls ---- */
+@media (max-width: 640px) {
+  .chs-seg {
+    flex-wrap: wrap;
+  }
+  .chs-seg .chs-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .chs-graph-controls {
+    gap: 6px;
+  }
+  .chs-graph-hint {
+    display: none;
+  }
+  .chs-faction-cell {
+    padding: 8px 10px;
+  }
+  .chs-char-title {
+    font-size: 13px;
+  }
 }
 
