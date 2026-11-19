@@ -1638,7 +1638,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     this.matrixScrollEl.addEventListener("dragover", (e) => this.onDragOver(e));
     this.matrixScrollEl.addEventListener("drop", (e) => this.onDrop(e));
     this.matrixScrollEl.addEventListener("dragend", () => this.onDragEnd());
-    this.matrixScrollEl.addEventListener("touchstart", (e) => this.onPinchStart(e), { passive: true });
+    this.matrixScrollEl.addEventListener("touchstart", (e) => this.onPinchStart(e), { passive: false });
     this.matrixScrollEl.addEventListener("touchmove", (e) => this.onPinchMove(e), { passive: false });
     this.matrixScrollEl.addEventListener("touchend", (e) => this.onPinchEnd(e));
     this.matrixScrollEl.addEventListener("touchcancel", (e) => this.onPinchEnd(e));
@@ -2376,6 +2376,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
   // ---- pinch-to-zoom (mobile) ----
   onPinchStart(e) {
     if (e.touches.length === 2) {
+      e.preventDefault();
       this.pinchDist = this.touchDistance(e.touches);
       this.pinchZoom = this.zoom;
       this.touchScrolling = false;
@@ -2405,9 +2406,18 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     }
   }
   onPinchEnd(e) {
-    if (e.touches.length < 2 && this.pinchDist > 0) {
-      this.pinchDist = 0;
-      void this.plugin.saveSettings();
+    if (e.touches.length < 2) {
+      if (this.pinchDist > 0) {
+        this.pinchDist = 0;
+        void this.plugin.saveSettings();
+      }
+      if (e.touches.length === 1) {
+        this.touchStartX = e.touches[0].clientX;
+        this.touchStartY = e.touches[0].clientY;
+        this.touchScrollLeft = this.matrixScrollEl.scrollLeft;
+        this.touchScrollTop = this.matrixScrollEl.scrollTop;
+        this.touchScrolling = true;
+      }
     }
     if (e.touches.length === 0) {
       this.touchScrolling = false;

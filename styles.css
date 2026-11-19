@@ -968,7 +968,7 @@ tr.chs-drop-root {
 }
 
 /* -------------------------------------------------------- mobile / narrow */
-@media (max-width: 640px), (max-height: 500px) and (orientation: landscape) {
+@media (max-width: 768px), (max-height: 500px) and (orientation: landscape) {
   .chs-content {
     padding: 6px;
     overflow-y: auto;
@@ -981,20 +981,50 @@ tr.chs-drop-root {
     --chs-col-w: 120px;
   }
 
+  /* V2.2: header must never overflow horizontally — stack every field
+     full-width (label above input), let the action buttons wrap. */
   .chs-bookinfo {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
+    flex-direction: column;
     gap: 6px;
-    align-items: end;
+    align-items: stretch;
   }
 
-  .chs-field {
+  .chs-field,
+  .chs-field-chips {
+    flex: 1 1 100%;
+    width: 100%;
     min-width: 0;
-    gap: 0;
+    gap: 3px;
   }
 
   .chs-field-label {
-    display: none;
+    display: block;
+    font-size: 12px;
+  }
+
+  .chs-bookinfo-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .chs-bookinfo-actions .chs-btn {
+    flex: 1 1 auto;
+  }
+
+  /* Top bar: project selector takes its own full-width row; buttons wrap. */
+  .chs-book-row {
+    gap: 6px;
+  }
+
+  .chs-book-row .chs-select {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .chs-toolbar-left,
+  .chs-toolbar-mid {
+    width: 100%;
   }
 
   .chs-input {

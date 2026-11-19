@@ -496,7 +496,9 @@ export class ChaiShuMatrixView extends ItemView {
     this.matrixScrollEl.addEventListener("dragend", () => this.onDragEnd());
 
     // V2.0: pinch-to-zoom (mobile) — replaces the floating +/- buttons.
-    this.matrixScrollEl.addEventListener("touchstart", (e) => this.onPinchStart(e), { passive: true });
+    // V2.2: touchstart is non-passive too, so we can preventDefault() the
+    // two-finger gesture BEFORE the WebView claims native pinch-zoom.
+    this.matrixScrollEl.addEventListener("touchstart", (e) => this.onPinchStart(e), { passive: false });
     this.matrixScrollEl.addEventListener("touchmove", (e) => this.onPinchMove(e), { passive: false });
     this.matrixScrollEl.addEventListener("touchend", (e) => this.onPinchEnd(e));
     this.matrixScrollEl.addEventListener("touchcancel", (e) => this.onPinchEnd(e));
@@ -1342,6 +1344,9 @@ export class ChaiShuMatrixView extends ItemView {
 
   private onPinchStart(e: TouchEvent): void {
     if (e.touches.length === 2) {
+      // Claim the two-finger gesture immediately so the WebView never turns it
+      // into its own page/global pinch-zoom (the #1 cause of "pinch does nothing").
+      e.preventDefault();
       this.pinchDist = this.touchDistance(e.touches);
       this.pinchZoom = this.zoom;
       this.touchScrolling = false;
@@ -1374,9 +1379,20 @@ export class ChaiShuMatrixView extends ItemView {
   }
 
   private onPinchEnd(e: TouchEvent): void {
-    if (e.touches.length < 2 && this.pinchDist > 0) {
-      this.pinchDist = 0;
-      void this.plugin.saveSettings();
+    if (e.touches.length < 2) {
+      if (this.pinchDist > 0) {
+        this.pinchDist = 0;
+        void this.plugin.saveSettings();
+      }
+      // A finger lifted off a pinch: re-arm single-finger scroll from the
+      // remaining finger's current position (so scroll works right after zoom).
+      if (e.touches.length === 1) {
+        this.touchStartX = e.touches[0].clientX;
+        this.touchStartY = e.touches[0].clientY;
+        this.touchScrollLeft = this.matrixScrollEl.scrollLeft;
+        this.touchScrollTop = this.matrixScrollEl.scrollTop;
+        this.touchScrolling = true;
+      }
     }
     if (e.touches.length === 0) {
       this.touchScrolling = false;
