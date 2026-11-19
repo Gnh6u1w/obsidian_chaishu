@@ -49,6 +49,47 @@ export class ChaiShuSettingTab extends PluginSettingTab {
         });
       });
 
+    containerEl.createEl("h3", { text: "矩阵显示" });
+
+    new Setting(containerEl)
+      .setName("矩阵单元格默认宽度")
+      .setDesc("矩阵单元格的默认宽度（100–300px），调整后立即生效")
+      .addSlider((s) => {
+        s.setLimits(100, 300, 10)
+          .setValue(this.plugin.settings.cellWidth || 150)
+          .setDynamicTooltip()
+          .onChange((v) => {
+            this.plugin.settings.cellWidth = v;
+            void this.plugin.saveSettings();
+            this.plugin.notifyViews();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("矩阵单元格默认高度")
+      .setDesc("矩阵单元格的默认最小高度（40–140px），调整后立即生效")
+      .addSlider((s) => {
+        s.setLimits(40, 140, 5)
+          .setValue(this.plugin.settings.cellHeight || 72)
+          .setDynamicTooltip()
+          .onChange((v) => {
+            this.plugin.settings.cellHeight = v;
+            void this.plugin.saveSettings();
+            this.plugin.notifyViews();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("矩阵缩放")
+      .setDesc("重置双指捏合缩放为 100%")
+      .addButton((b) => {
+        b.setButtonText("重置缩放").onClick(async () => {
+          this.plugin.settings.matrixZoom = 1;
+          await this.plugin.saveSettings();
+          this.plugin.notifyViews();
+        });
+      });
+
     this.renderDimensionManagement(containerEl);
 
     containerEl.createEl("h3", { text: "危险操作" });

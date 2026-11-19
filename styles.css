@@ -347,57 +347,6 @@
   -webkit-overflow-scrolling: touch;
 }
 
-/* Floating view-zoom control (+ / − / reset) */
-.chs-zoom-control {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 10px;
-  background: var(--background-secondary);
-  border: 1px solid var(--background-modifier-border);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-}
-
-.chs-zoom-btn {
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  padding: 0;
-  border-radius: 6px;
-  border: 1px solid var(--background-modifier-border);
-  background: var(--background-primary);
-  color: var(--text-normal);
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.chs-zoom-btn:hover {
-  background: var(--background-modifier-hover);
-}
-
-.chs-zoom-reset {
-  width: auto;
-  padding: 0 8px;
-  font-size: 12px;
-}
-
-.chs-zoom-label {
-  min-width: 48px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
 .chs-view {
   /* Fixed column widths used by the matrix <colgroup> (table-layout: fixed). */
   --chs-node-w: 200px;
@@ -661,7 +610,7 @@ tr.chs-drop-root {
   width: var(--chs-col-w);
   min-width: var(--chs-col-w);
   max-width: var(--chs-col-w);
-  min-height: calc(72px * var(--chs-zoom, 1));
+  min-height: var(--chs-cell-h, 72px);
   padding: 0;
   vertical-align: top;
   cursor: pointer;
@@ -761,6 +710,40 @@ tr.chs-drop-root {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   text-overflow: ellipsis;
+}
+
+/* Per-dimension summary cells (volume / unit rows) */
+.chs-summary-dim {
+  width: var(--chs-col-w);
+  min-width: var(--chs-col-w);
+  max-width: var(--chs-col-w);
+  min-height: var(--chs-cell-h, 72px);
+  padding: 0;
+  vertical-align: top;
+  cursor: pointer;
+  border-right: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: color-mix(in srgb, var(--interactive-accent) 4%, var(--background-primary));
+}
+
+.chs-summary-dim.is-empty {
+  background: color-mix(in srgb, var(--interactive-accent) 3%, var(--background-secondary));
+}
+
+.chs-summary-dim.is-filled {
+  background: var(--background-primary);
+  box-shadow: inset 3px 0 0 var(--interactive-accent);
+}
+
+.chs-hidden-content {
+  min-height: var(--chs-cell-h, 72px);
+  padding: 8px;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+  vertical-align: middle;
+  border-right: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .chs-cell-filler {

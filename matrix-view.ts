@@ -20,7 +20,7 @@ import {
 } from "./types";
 import {
   buildChapterPath,
-  buildSummaryPath,
+  buildSummaryDimPath,
   cellKey,
   collectChapters,
   collectUncollectedChapters,
@@ -28,7 +28,7 @@ import {
   collectVolumes,
   createChapterNote,
   createNode,
-  createSummaryNote,
+  createSummaryDimNote,
   ensureReturnFooter,
   findNode,
   findParentArray,
@@ -56,7 +56,6 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 const ZOOM_MIN = 0.6;
 const ZOOM_MAX = 1.6;
-const ZOOM_STEP = 0.1;
 
 function makeSvg(tag: string, attrs: Record<string, string>): SVGElement {
   const el = document.createElementNS(SVG_NS, tag);
@@ -137,7 +136,9 @@ export class ChaiShuMatrixView extends ItemView {
   private selectedChapterIds = new Set<string>();
   private selectBarEl!: HTMLElement;
   private selectCountEl!: HTMLElement;
-  private zoomLabelEl!: HTMLElement;
+  // Pinch-to-zoom state (V2.0)
+  private pinchDist = 0;
+  private pinchZoom = 1;
 
   constructor(leaf: WorkspaceLeaf, plugin: ChaiShuMatrixPlugin) {
     super(leaf);
@@ -227,7 +228,6 @@ export class ChaiShuMatrixView extends ItemView {
     this.buildBookInfo();
     this.buildToolbar();
     this.buildMatrix();
-    this.buildZoomControl();
     this.applyZoom();
 
     if (prevScroll && this.matrixScrollEl) {
@@ -389,6 +389,11 @@ export class ChaiShuMatrixView extends ItemView {
     importBtn.addEventListener("click", () => this.openImportModal());
     const multiBtn = mid.createEl("button", { text: "☑ 多选", cls: "chs-btn" });
     multiBtn.addEventListener("click", () => this.setSelectMode(!this.selectMode));
+    const focusBtn = mid.createEl("button", {
+      text: this.settings.focusMode ? "👁 专注模式 开" : "👁 专注模式",
+      cls: "chs-btn",
+    });
+    focusBtn.addEventListener("click", () => this.toggleFocusMode());
 
     this.statsEl = tb.createDiv("chs-stats");
 
@@ -415,6 +420,12 @@ export class ChaiShuMatrixView extends ItemView {
     this.matrixScrollEl.addEventListener("dragover", (e) => this.onDragOver(e));
     this.matrixScrollEl.addEventListener("drop", (e) => this.onDrop(e));
     this.matrixScrollEl.addEventListener("dragend", () => this.onDragEnd());
+
+    // V2.0: pinch-to-zoom (mobile) — replaces the floating +/- buttons.
+    this.matrixScrollEl.addEventListener("touchstart", (e) => this.onPinchStart(e), { passive: true });
+    this.matrixScrollEl.addEventListener("touchmove", (e) => this.onPinchMove(e), { passive: false });
+    this.matrixScrollEl.addEventListener("touchend", (e) => this.onPinchEnd(e));
+    this.matrixScrollEl.addEventListener("touchcancel", (e) => this.onPinchEnd(e));
 
     this.setupObserver();
     this.renderMatrixRows();
@@ -552,13 +563,27 @@ export class ChaiShuMatrixView extends ItemView {
         }
       }
       tr.createEl("td", { cls: "chs-cell-filler" });
+    } else if (this.settings.focusMode || node.hideContent) {
+      // V2.0 focus mode: hide the volume/unit dimension cells (keep the node row).
+      const hideTd = tr.createEl("td", { cls: "chs-summary chs-hidden-content" });
+      hideTd.setAttribute("colspan", String(book.dimensions.length + 1));
+      hideTd.createSpan("chs-summary-hint").setText("已隐藏维度内容");
     } else {
-      // V1.8: volume/unit row renders a wide summary preview box across all
-      // data columns (replaces the old trailing summary row).
-      const summaryTd = tr.createEl("td", { cls: "chs-summary" });
-      summaryTd.dataset.summaryId = node.id;
-      summaryTd.setAttribute("colspan", String(book.dimensions.length + 1));
-      this.renderSummaryCell(summaryTd, node);
+      // V2.0: volume/unit rows mirror chapter rows — one cell per dimension.
+      // Non-chart dimensions link to per-dimension summary notes; the chart
+      // dimension shows the read-only aggregate emotion sparkline.
+      for (const dim of book.dimensions) {
+        const td = tr.createEl("td", { cls: "chs-cell chs-summary-dim" });
+        td.style.setProperty("--chs-color", dim.color);
+        if (dim.isChart) {
+          this.renderAggregateEmotionCell(td, node, dim);
+        } else {
+          td.dataset.summaryNodeId = node.id;
+          td.dataset.summaryDimId = dim.id;
+          this.renderSummaryDimCell(td, node, dim);
+        }
+      }
+      tr.createEl("td", { cls: "chs-cell-filler" });
     }
   }
 
@@ -592,17 +617,6 @@ export class ChaiShuMatrixView extends ItemView {
       node.type === "volume" ? "library" : node.type === "unit" ? "layers" : "file-text"
     );
     td.createSpan("chs-node-name").setText(node.name);
-
-    if (node.type !== "chapter") {
-      const hasSummary =
-        !!node.summaryFile &&
-        this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof TFile;
-      const sbtn = td.createEl("button", {
-        cls: "chs-btn chs-btn-sm chs-node-summary-btn",
-        text: hasSummary ? "✓总结" : "＋总结",
-      });
-      sbtn.dataset.summaryId = node.id;
-    }
 
     const chartDim = this.getChartDim();
     const chartBtn = td.createEl("button", { cls: "chs-icon-btn chs-node-chart-btn" });
@@ -652,10 +666,11 @@ export class ChaiShuMatrixView extends ItemView {
     }
   }
 
-  private renderSummaryCell(td: HTMLElement, node: NodeData): void {
+  /** V2.0: render one volume/unit per-dimension summary cell. */
+  private renderSummaryDimCell(td: HTMLElement, node: NodeData, dim: Dimension): void {
+    const filePath = node.summaryFiles?.[dim.id] ?? "";
     const fileExists =
-      !!node.summaryFile &&
-      this.app.vault.getAbstractFileByPath(node.summaryFile) instanceof TFile;
+      !!filePath && this.app.vault.getAbstractFileByPath(filePath) instanceof TFile;
     td.empty();
     td.removeClass("is-filled", "is-empty");
     if (fileExists) {
@@ -664,15 +679,29 @@ export class ChaiShuMatrixView extends ItemView {
       this.observer?.observe(td);
     } else {
       td.addClass("is-empty");
-      td.createSpan("chs-summary-hint").setText(
-        "+ 点击添加" + (node.type === "volume" ? "卷总结" : "单元总结")
-      );
+      td.createSpan("chs-summary-hint").setText("+ 添加");
+    }
+  }
+
+  /** V2.0: chart-dimension cell for a volume/unit (read-only aggregate sparkline). */
+  private renderAggregateEmotionCell(td: HTMLElement, node: NodeData, dim: Dimension): void {
+    td.empty();
+    td.removeClass("is-filled", "is-empty");
+    const data = nodeEmotionData(node);
+    if (data.length >= 2) {
+      td.addClass("is-filled");
+      const body = td.createDiv("chs-cell-body");
+      renderSparkline(body, data, dim.color, 140, 44);
+      body.createDiv("chs-cell-emotion-hint").setText("聚合折线");
+    } else {
+      td.addClass("is-empty");
+      td.createSpan("chs-summary-hint").setText("暂无");
     }
   }
 
   private async loadContent(el: HTMLElement): Promise<void> {
     if (el.dataset.cellKey) return this.loadCell(el);
-    if (el.dataset.summaryId) return this.loadSummary(el);
+    if (el.dataset.summaryNodeId) return this.loadSummaryDim(el);
   }
 
   private async loadCell(td: HTMLElement): Promise<void> {
@@ -720,27 +749,25 @@ export class ChaiShuMatrixView extends ItemView {
     bodyEl.setText(body.length > MAX_PREVIEW ? body.slice(0, MAX_PREVIEW) + "…" : body);
   }
 
-  private async loadSummary(td: HTMLElement): Promise<void> {
+  private async loadSummaryDim(td: HTMLElement): Promise<void> {
     const book = this.book;
     if (!book) return;
-    const nodeId = td.dataset.summaryId;
-    if (!nodeId) return;
+    const nodeId = td.dataset.summaryNodeId;
+    const dimId = td.dataset.summaryDimId;
+    if (!nodeId || !dimId) return;
     const node = findNode(book.structure, nodeId);
     if (!node) return;
 
-    const f = node.summaryFile
-      ? this.app.vault.getAbstractFileByPath(node.summaryFile)
+    const f = node.summaryFiles?.[dimId]
+      ? this.app.vault.getAbstractFileByPath(node.summaryFiles[dimId])
       : null;
     td.empty();
     if (!(f instanceof TFile)) {
-      node.summaryFile = "";
-      node.summaryHasContent = false;
+      if (node.summaryFiles) delete node.summaryFiles[dimId];
       void this.plugin.saveSettings();
       td.removeClass("is-filled");
       td.addClass("is-empty");
-      td.createSpan("chs-summary-hint").setText(
-        "+ 点击添加" + (node.type === "volume" ? "卷总结" : "单元总结")
-      );
+      td.createSpan("chs-summary-hint").setText("+ 添加");
       this.updateStats();
       return;
     }
@@ -755,9 +782,7 @@ export class ChaiShuMatrixView extends ItemView {
     if (!body) {
       td.removeClass("is-filled");
       td.addClass("is-empty");
-      td.createSpan("chs-summary-hint").setText(
-        "+ 点击添加" + (node.type === "volume" ? "卷总结" : "单元总结")
-      );
+      td.createSpan("chs-summary-hint").setText("+ 添加");
       return;
     }
     td.addClass("is-filled");
@@ -786,9 +811,12 @@ export class ChaiShuMatrixView extends ItemView {
       return;
     }
 
-    const summaryEl = t.closest("[data-summary-id]") as HTMLElement | null;
+    const summaryEl = t.closest("[data-summary-node-id]") as HTMLElement | null;
     if (summaryEl) {
-      void this.openSummaryNote(summaryEl.dataset.summaryId as string);
+      void this.openSummaryDimNote(
+        summaryEl.dataset.summaryNodeId as string,
+        summaryEl.dataset.summaryDimId as string
+      );
       return;
     }
 
@@ -926,20 +954,22 @@ export class ChaiShuMatrixView extends ItemView {
     }).open();
   }
 
-  /** V1.5: open a volume/unit summary note in the main editor (never inline). */
-  private async openSummaryNote(nodeId: string): Promise<void> {
+  /** V2.0: open a volume/unit per-dimension summary note in the main editor. */
+  private async openSummaryDimNote(nodeId: string, dimId: string): Promise<void> {
     const book = this.book;
     if (!book) return;
     const node = findNode(book.structure, nodeId);
-    if (!node || node.type === "chapter") return;
+    const dim = book.dimensions.find((d) => d.id === dimId);
+    if (!node || node.type === "chapter" || !dim || dim.isChart) return;
 
-    let file = node.summaryFile
-      ? this.app.vault.getAbstractFileByPath(node.summaryFile)
+    const existingPath = node.summaryFiles?.[dimId] ?? "";
+    let file = existingPath
+      ? this.app.vault.getAbstractFileByPath(existingPath)
       : null;
     if (!(file instanceof TFile)) {
-      file = await createSummaryNote(this.app.vault, book, nodeId, "");
-      node.summaryFile = file.path;
-      node.summaryHasContent = false;
+      file = await createSummaryDimNote(this.app.vault, book, nodeId, dim, "");
+      if (!node.summaryFiles) node.summaryFiles = {};
+      node.summaryFiles[dimId] = file.path;
       await this.plugin.saveSettings();
       this.renderMatrix();
     } else {
@@ -997,6 +1027,22 @@ export class ChaiShuMatrixView extends ItemView {
     node.collapsed = !node.collapsed;
     void this.plugin.saveSettings();
     this.renderMatrix();
+  }
+
+  private toggleHideContent(nodeId: string): void {
+    const book = this.book;
+    if (!book) return;
+    const node = findNode(book.structure, nodeId);
+    if (!node || node.type === "chapter") return;
+    node.hideContent = !node.hideContent;
+    void this.plugin.saveSettings();
+    this.renderMatrix();
+  }
+
+  private toggleFocusMode(): void {
+    this.settings.focusMode = !this.settings.focusMode;
+    void this.plugin.saveSettings();
+    this.render();
   }
 
   // ---------------------------------------------------------------- nodes
@@ -1226,40 +1272,48 @@ export class ChaiShuMatrixView extends ItemView {
     ).matches;
   }
 
-  private buildZoomControl(): void {
-    const control = this.contentEl.createDiv("chs-zoom-control");
-    const minus = control.createEl("button", { text: "−", cls: "chs-zoom-btn" });
-    minus.setAttribute("aria-label", "缩小");
-    minus.addEventListener("click", () => this.changeZoom(-ZOOM_STEP));
-    this.zoomLabelEl = control.createSpan("chs-zoom-label");
-    this.zoomLabelEl.setText(Math.round(this.zoom * 100) + "%");
-    const plus = control.createEl("button", { text: "＋", cls: "chs-zoom-btn" });
-    plus.setAttribute("aria-label", "放大");
-    plus.addEventListener("click", () => this.changeZoom(ZOOM_STEP));
-    const reset = control.createEl("button", {
-      text: "重置",
-      cls: "chs-zoom-btn chs-zoom-reset",
-    });
-    reset.setAttribute("aria-label", "重置缩放");
-    reset.addEventListener("click", () => this.changeZoom(0));
-  }
-
-  private changeZoom(delta: number): void {
-    const next = delta === 0 ? 1 : this.zoom + delta;
-    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 10) / 10));
-    this.applyZoom();
-    void this.plugin.saveSettings();
-  }
-
+  /** V2.0: apply the pinch zoom + settings-driven cell size to CSS variables. */
   private applyZoom(): void {
     const z = this.zoom;
     const compact = this.isCompactViewport();
-    const nodeW = Math.round((compact ? 140 : 200) * z);
-    const colW = Math.round((compact ? 120 : 150) * z);
-    this.contentEl.style.setProperty("--chs-node-w", nodeW + "px");
-    this.contentEl.style.setProperty("--chs-col-w", colW + "px");
+    const baseNodeW = compact ? 140 : 200;
+    const baseColW = this.settings.cellWidth || 150;
+    const cellH = this.settings.cellHeight || 72;
+    this.contentEl.style.setProperty("--chs-node-w", Math.round(baseNodeW * z) + "px");
+    this.contentEl.style.setProperty("--chs-col-w", Math.round(baseColW * z) + "px");
+    this.contentEl.style.setProperty("--chs-cell-h", Math.round(cellH * z) + "px");
     this.contentEl.style.setProperty("--chs-zoom", String(z));
-    if (this.zoomLabelEl) this.zoomLabelEl.setText(Math.round(z * 100) + "%");
+  }
+
+  // ---- pinch-to-zoom (mobile) ----
+
+  private onPinchStart(e: TouchEvent): void {
+    if (e.touches.length === 2) {
+      this.pinchDist = this.touchDistance(e.touches);
+      this.pinchZoom = this.zoom;
+    }
+  }
+
+  private onPinchMove(e: TouchEvent): void {
+    if (e.touches.length !== 2 || this.pinchDist <= 0) return;
+    e.preventDefault();
+    const dist = this.touchDistance(e.touches);
+    const z = this.pinchZoom * (dist / this.pinchDist);
+    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 10) / 10));
+    this.applyZoom();
+  }
+
+  private onPinchEnd(e: TouchEvent): void {
+    if (e.touches.length < 2 && this.pinchDist > 0) {
+      this.pinchDist = 0;
+      void this.plugin.saveSettings();
+    }
+  }
+
+  private touchDistance(touches: TouchList): number {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.hypot(dx, dy);
   }
 
   private deleteNode(nodeId: string): void {
@@ -1302,9 +1356,9 @@ export class ChaiShuMatrixView extends ItemView {
       );
       menu.addItem((i) =>
         i
-          .setTitle("编辑" + (node.type === "volume" ? "卷总结" : "单元总结"))
-          .setIcon("pencil")
-          .onClick(() => void this.openSummaryNote(nodeId))
+          .setTitle(node.hideContent ? "显示该行维度内容" : "隐藏该行维度内容")
+          .setIcon("eye-off")
+          .onClick(() => this.toggleHideContent(nodeId))
       );
     }
     if (node.type === "chapter") {
@@ -1534,18 +1588,23 @@ export class ChaiShuMatrixView extends ItemView {
     if (node.type === "volume") summaryNodes.push(node, ...collectUnits([node]));
     else if (node.type === "unit") summaryNodes.push(node);
     for (const sn of summaryNodes) {
-      if (!sn.summaryFile) continue;
-      const newPath = buildSummaryPath(book, sn.id);
-      if (newPath === sn.summaryFile) continue;
-      const f = this.app.vault.getAbstractFileByPath(sn.summaryFile);
-      if (f instanceof TFile) {
-        try {
-          await this.app.fileManager.renameFile(f, newPath);
-        } catch (e) {
-          /* skip */
+      const files = sn.summaryFiles ?? {};
+      for (const dim of book.dimensions) {
+        if (dim.isChart) continue;
+        const oldPath = files[dim.id];
+        if (!oldPath) continue;
+        const newPath = buildSummaryDimPath(book, sn.id, dim.name);
+        if (newPath === oldPath) continue;
+        const f = this.app.vault.getAbstractFileByPath(oldPath);
+        if (f instanceof TFile) {
+          try {
+            await this.app.fileManager.renameFile(f, newPath);
+          } catch (e) {
+            /* skip */
+          }
         }
+        files[dim.id] = newPath;
       }
-      sn.summaryFile = newPath;
     }
   }
 
@@ -1799,7 +1858,8 @@ export class ChaiShuMatrixView extends ItemView {
     const volumes = collectVolumes(book.structure).length;
     const units = collectUnits(book.structure).length;
     const chapters = collectChapters(book.structure).length;
-    const total = chapters * book.dimensions.length + volumes + units;
+    const nonChartDims = book.dimensions.filter((d) => !d.isChart).length;
+    const total = chapters * book.dimensions.length + (volumes + units) * nonChartDims;
     const filled = this.countFilled();
     const rate = total > 0 ? Math.round((filled / total) * 100) : 0;
     this.statsEl.setText(
@@ -1837,13 +1897,11 @@ export class ChaiShuMatrixView extends ItemView {
         }
       }
     }
-    const summaryNodes = [...collectVolumes(book.structure), ...collectUnits(book.structure)];
-    for (const sn of summaryNodes) {
-      if (
-        sn.summaryFile &&
-        this.app.vault.getAbstractFileByPath(sn.summaryFile) instanceof TFile
-      ) {
-        n++;
+    for (const sn of [...collectVolumes(book.structure), ...collectUnits(book.structure)]) {
+      for (const d of book.dimensions) {
+        if (d.isChart) continue;
+        const p = sn.summaryFiles?.[d.id];
+        if (p && this.app.vault.getAbstractFileByPath(p) instanceof TFile) n++;
       }
     }
     return n;

@@ -301,10 +301,13 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       name: sanitizeFileName(n.name ?? ""),
       summaryFile: typeof n.summaryFile === "string" ? n.summaryFile : "",
       summaryHasContent: !!n.summaryHasContent,
+      summaryFiles:
+        n.summaryFiles && typeof n.summaryFiles === "object" ? n.summaryFiles : {},
       children: Array.isArray(n.children)
         ? n.children.map((c: any) => this.normalizeNode(c))
         : [],
       collapsed: !!n.collapsed,
+      hideContent: !!n.hideContent,
       emotionData: Array.isArray(n.emotionData)
         ? (n.emotionData as unknown[]).map((v) => Number(v)).filter((v) => Number.isFinite(v))
         : [],
@@ -337,9 +340,12 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         }
       }
       for (const node of this.allNodes(book)) {
-        if (node.summaryFile === oldPath) {
-          node.summaryFile = file.path;
-          changed = true;
+        if (node.type === "chapter") continue;
+        for (const dimId of Object.keys(node.summaryFiles ?? {})) {
+          if (node.summaryFiles[dimId] === oldPath) {
+            node.summaryFiles[dimId] = file.path;
+            changed = true;
+          }
         }
       }
     }
@@ -362,10 +368,12 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         }
       }
       for (const node of this.allNodes(book)) {
-        if (node.summaryFile === file.path) {
-          node.summaryFile = "";
-          node.summaryHasContent = false;
-          changed = true;
+        if (node.type === "chapter") continue;
+        for (const dimId of Object.keys(node.summaryFiles ?? {})) {
+          if (node.summaryFiles[dimId] === file.path) {
+            delete node.summaryFiles[dimId];
+            changed = true;
+          }
         }
       }
     }
@@ -398,9 +406,12 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         }
       }
       for (const n of this.allNodes(book)) {
-        if (n.type !== "chapter" && n.summaryFile && !resolves(n.summaryFile)) {
-          stale = true;
-          break outer;
+        if (n.type === "chapter") continue;
+        for (const p of Object.values(n.summaryFiles ?? {})) {
+          if (p && !resolves(p)) {
+            stale = true;
+            break outer;
+          }
         }
       }
     }
@@ -448,24 +459,25 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           continue;
         }
 
-        // --- volume/unit summary notes ---
+        // --- per-dimension volume/unit summary notes (V2.0) ---
         const fmType = String(fm["类型"] ?? fm["type"] ?? "");
-        if (fmType === "卷总结") {
-          const volName = String(fm["卷名"] ?? fm["volume"] ?? "");
-          const v = volName ? volByName.get(volName) : null;
-          if (v && !(v.summaryFile && resolves(v.summaryFile))) {
-            v.summaryFile = file.path;
-            v.summaryHasContent = true;
-            changed = true;
+        const sumDim = String(fm["维度"] ?? fm["dimension"] ?? "");
+        if ((fmType === "卷总结" || fmType === "单元总结") && sumDim) {
+          const dim = dimByName.get(sumDim);
+          if (!dim) continue;
+          let target: NodeData | undefined;
+          if (fmType === "卷总结") {
+            const volName = String(fm["所属卷"] ?? fm["卷名"] ?? fm["volume"] ?? "");
+            target = volName ? volByName.get(volName) : undefined;
+          } else {
+            const unitName = String(fm["单元名"] ?? fm["unit"] ?? "");
+            target = unitName ? unitByName.get(unitName) : undefined;
           }
-        } else if (fmType === "单元总结") {
-          const unitName = String(fm["单元名"] ?? fm["unit"] ?? "");
-          const u = unitName ? unitByName.get(unitName) : null;
-          if (u && !(u.summaryFile && resolves(u.summaryFile))) {
-            u.summaryFile = file.path;
-            u.summaryHasContent = true;
-            changed = true;
-          }
+          if (!target) continue;
+          if (!target.summaryFiles) target.summaryFiles = {};
+          if (target.summaryFiles[dim.id] && resolves(target.summaryFiles[dim.id])) continue;
+          target.summaryFiles[dim.id] = file.path;
+          changed = true;
         }
       }
     }

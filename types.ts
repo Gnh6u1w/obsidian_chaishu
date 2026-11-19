@@ -16,11 +16,15 @@ export interface NodeData {
   id: string;
   type: NodeType;
   name: string;
-  /** Vault-relative path of the volume/unit summary note, "" when not created. */
+  /** Legacy single summary note (V1.8 and earlier) — no longer rendered in V2.0. */
   summaryFile: string;
   summaryHasContent: boolean;
+  /** Per-dimension summary notes (V2.0): dimensionId → vault-relative path. */
+  summaryFiles: Record<string, string>;
   children: NodeData[];
   collapsed: boolean;
+  /** Hide this volume/unit's dimension cells (focus mode, per-row). */
+  hideContent: boolean;
   /** Chapter-only: emotion values (1..5) stored in the plugin config. */
   emotionData: number[];
 }
@@ -72,8 +76,14 @@ export interface ChaiShuSettings {
   activeBookId: string;
   /** Collapse the left outline column (◀/▶) to free up matrix space. */
   outlineCollapsed: boolean;
-  /** Matrix view zoom multiplier (0.6–1.6, 1 = 100%). */
+  /** Matrix view zoom multiplier (0.6–1.6, 1 = 100%), driven by pinch on mobile. */
   matrixZoom: number;
+  /** Global focus mode: hide all volume/unit dimension cells. */
+  focusMode: boolean;
+  /** Default matrix cell width in px (100–300). */
+  cellWidth: number;
+  /** Default matrix cell min-height in px (40–140). */
+  cellHeight: number;
   books: BookData[];
 }
 
@@ -84,6 +94,9 @@ export const DEFAULT_SETTINGS: ChaiShuSettings = {
   activeBookId: "",
   outlineCollapsed: false,
   matrixZoom: 1,
+  focusMode: false,
+  cellWidth: 150,
+  cellHeight: 72,
   books: [],
 };
 

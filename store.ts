@@ -194,8 +194,10 @@ export function createNode(
     name: sanitizeFileName(name),
     summaryFile: "",
     summaryHasContent: false,
+    summaryFiles: {},
     children,
     collapsed: false,
+    hideContent: false,
     emotionData: [],
   };
 }
@@ -478,6 +480,67 @@ export async function createSummaryNote(
   const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
   await ensureFolder(vault, folderPath);
   const content = buildSummaryContent(book, nodeId, body);
+  const existing = vault.getAbstractFileByPath(filePath);
+  if (existing instanceof TFile) {
+    await vault.modify(existing, content);
+    return existing;
+  }
+  return await vault.create(filePath, content);
+}
+
+// ---------------------------------------------- per-dimension summaries (V2.0)
+
+/** Archive path for a per-dimension volume/unit summary note:
+ *  存放位置/《书名》/第X卷总结-维度.md  (flat under the book folder). */
+export function buildSummaryDimPath(
+  book: BookData,
+  nodeId: string,
+  dimensionName: string
+): string {
+  const ctx = findNodeContext(book.structure, nodeId);
+  if (!ctx || ctx.node.type === "chapter") return "";
+  const parts: string[] = [bookFolderName(book.bookInfo.title)];
+  parts.push(sanitizeFileName(ctx.node.name + "总结-" + dimensionName) + ".md");
+  return joinVaultPath(storageBase(book), parts);
+}
+
+/** YAML + return footer for a per-dimension volume/unit summary note. */
+export function buildSummaryDimContent(
+  book: BookData,
+  nodeId: string,
+  dimension: Dimension,
+  body: string
+): string {
+  const ctx = findNodeContext(book.structure, nodeId);
+  const node = ctx?.node;
+  const lines = ["---"];
+  if (node?.type === "volume") {
+    lines.push("类型: " + yamlString("卷总结"));
+    lines.push("所属卷: " + yamlString(node.name));
+  } else if (node?.type === "unit") {
+    lines.push("类型: " + yamlString("单元总结"));
+    if (ctx?.volume) lines.push("所属卷: " + yamlString(ctx.volume.name));
+    lines.push("单元名: " + yamlString(node.name));
+  }
+  lines.push("维度: " + yamlString(dimension.name));
+  lines.push("拆书项目: " + yamlString(bookFolderName(book.bookInfo.title)));
+  lines.push("---", "");
+  const normalizedBody = stripReturnFooter(body ? body.replace(/\r\n/g, "\n") : "");
+  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "") + RETURN_FOOTER;
+}
+
+/** Create (or overwrite) a per-dimension volume/unit summary note. */
+export async function createSummaryDimNote(
+  vault: Vault,
+  book: BookData,
+  nodeId: string,
+  dimension: Dimension,
+  body: string
+): Promise<TFile> {
+  const filePath = buildSummaryDimPath(book, nodeId, dimension.name);
+  const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
+  await ensureFolder(vault, folderPath);
+  const content = buildSummaryDimContent(book, nodeId, dimension, body);
   const existing = vault.getAbstractFileByPath(filePath);
   if (existing instanceof TFile) {
     await vault.modify(existing, content);
