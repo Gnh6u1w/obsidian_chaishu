@@ -316,6 +316,22 @@ export function collectUnits(nodes: NodeData[]): NodeData[] {
   return out;
 }
 
+/** Chapters not yet collected into a unit (top-level or directly under a volume). */
+export function collectUncollectedChapters(nodes: NodeData[]): NodeData[] {
+  const out: NodeData[] = [];
+  function walk(list: NodeData[], insideUnit: boolean): void {
+    for (const n of list) {
+      if (n.type === "chapter") {
+        if (!insideUnit) out.push(n);
+      } else {
+        walk(n.children, n.type === "unit");
+      }
+    }
+  }
+  walk(nodes, false);
+  return out;
+}
+
 // ---------------------------------------------------------------- paths
 
 function storageBase(book: BookData): string {

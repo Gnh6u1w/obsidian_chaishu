@@ -72,6 +72,8 @@ export interface ChaiShuSettings {
   activeBookId: string;
   /** Collapse the left outline column (◀/▶) to free up matrix space. */
   outlineCollapsed: boolean;
+  /** Matrix view zoom multiplier (0.6–1.6, 1 = 100%). */
+  matrixZoom: number;
   books: BookData[];
 }
 
@@ -81,6 +83,7 @@ export const DEFAULT_SETTINGS: ChaiShuSettings = {
   defaultStoragePath: "",
   activeBookId: "",
   outlineCollapsed: false,
+  matrixZoom: 1,
   books: [],
 };
 

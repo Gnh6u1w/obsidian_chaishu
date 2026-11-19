@@ -347,10 +347,63 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* Floating view-zoom control (+ / − / reset) */
+.chs-zoom-control {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.chs-zoom-btn {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chs-zoom-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.chs-zoom-reset {
+  width: auto;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.chs-zoom-label {
+  min-width: 48px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .chs-view {
   /* Fixed column widths used by the matrix <colgroup> (table-layout: fixed). */
   --chs-node-w: 200px;
   --chs-col-w: 150px;
+  /* Matrix text/height zoom multiplier (1 = 100%). */
+  --chs-zoom: 1;
 }
 
 .chs-matrix {
@@ -468,7 +521,7 @@
 }
 
 .chs-capsule-name {
-  font-size: 13px;
+  font-size: calc(13px * var(--chs-zoom, 1));
   font-weight: 600;
   color: var(--text-normal);
   white-space: nowrap;
@@ -549,7 +602,7 @@ tr.chs-drop-root {
 }
 
 .chs-node-name {
-  font-size: 13px;
+  font-size: calc(13px * var(--chs-zoom, 1));
   font-weight: 600;
   color: var(--text-normal);
   vertical-align: middle;
@@ -599,7 +652,7 @@ tr.chs-drop-root {
 
 .chs-cell-emotion-hint {
   margin-top: 4px;
-  font-size: 11px;
+  font-size: calc(11px * var(--chs-zoom, 1));
   color: var(--text-faint);
 }
 
@@ -608,7 +661,7 @@ tr.chs-drop-root {
   width: var(--chs-col-w);
   min-width: var(--chs-col-w);
   max-width: var(--chs-col-w);
-  min-height: 72px;
+  min-height: calc(72px * var(--chs-zoom, 1));
   padding: 0;
   vertical-align: top;
   cursor: pointer;
@@ -650,13 +703,13 @@ tr.chs-drop-root {
 .chs-cell-hint {
   display: block;
   padding: 0 8px 8px;
-  font-size: 11px;
+  font-size: calc(11px * var(--chs-zoom, 1));
   color: var(--text-faint);
 }
 
 .chs-cell-body {
   padding: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--chs-zoom, 1));
   line-height: 1.5;
   color: var(--text-normal);
   white-space: pre-wrap;
@@ -691,14 +744,14 @@ tr.chs-drop-root {
 .chs-summary-hint {
   display: block;
   padding: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--chs-zoom, 1));
   color: var(--text-faint);
   font-style: italic;
 }
 
 .chs-summary-body {
   padding: 8px;
-  font-size: 13px;
+  font-size: calc(13px * var(--chs-zoom, 1));
   line-height: 1.5;
   color: var(--text-normal);
   white-space: pre-wrap;

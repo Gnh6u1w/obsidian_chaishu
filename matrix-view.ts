@@ -23,6 +23,7 @@ import {
   buildSummaryPath,
   cellKey,
   collectChapters,
+  collectUncollectedChapters,
   collectUnits,
   collectVolumes,
   createChapterNote,
@@ -52,6 +53,10 @@ import {
 
 const MAX_PREVIEW = 300;
 const SVG_NS = "http://www.w3.org/2000/svg";
+
+const ZOOM_MIN = 0.6;
+const ZOOM_MAX = 1.6;
+const ZOOM_STEP = 0.1;
 
 function makeSvg(tag: string, attrs: Record<string, string>): SVGElement {
   const el = document.createElementNS(SVG_NS, tag);
@@ -132,6 +137,7 @@ export class ChaiShuMatrixView extends ItemView {
   private selectedChapterIds = new Set<string>();
   private selectBarEl!: HTMLElement;
   private selectCountEl!: HTMLElement;
+  private zoomLabelEl!: HTMLElement;
 
   constructor(leaf: WorkspaceLeaf, plugin: ChaiShuMatrixPlugin) {
     super(leaf);
@@ -221,6 +227,8 @@ export class ChaiShuMatrixView extends ItemView {
     this.buildBookInfo();
     this.buildToolbar();
     this.buildMatrix();
+    this.buildZoomControl();
+    this.applyZoom();
 
     if (prevScroll && this.matrixScrollEl) {
       this.matrixScrollEl.scrollLeft = prevScroll.left;
@@ -1073,6 +1081,18 @@ export class ChaiShuMatrixView extends ItemView {
     this.selectCountEl = this.selectBarEl.createSpan("chs-select-count");
     this.selectCountEl.setText("已选 " + this.selectedChapterIds.size + " 章");
 
+    const allBtn = this.selectBarEl.createEl("button", {
+      text: "全选",
+      cls: "chs-btn chs-btn-sm",
+    });
+    allBtn.addEventListener("click", () => this.selectAll());
+
+    const moveBtn = this.selectBarEl.createEl("button", {
+      text: "移动到…",
+      cls: "chs-btn chs-btn-sm",
+    });
+    moveBtn.addEventListener("click", () => void this.openMoveSelected());
+
     const collectBtn = this.selectBarEl.createEl("button", {
       text: "＋ 收纳为单元",
       cls: "chs-btn chs-btn-primary chs-btn-sm",
@@ -1119,6 +1139,127 @@ export class ChaiShuMatrixView extends ItemView {
     this.renderSelectBar();
     await this.plugin.saveSettings();
     this.render();
+  }
+
+  // ----------------------------------------------- multi-select batch ops
+
+  private selectAll(): void {
+    const book = this.book;
+    if (!book) return;
+    const uncollected = collectUncollectedChapters(book.structure);
+    const allSelected =
+      uncollected.length > 0 &&
+      uncollected.every((c) => this.selectedChapterIds.has(c.id));
+    if (allSelected) {
+      for (const c of uncollected) this.selectedChapterIds.delete(c.id);
+    } else {
+      for (const c of uncollected) this.selectedChapterIds.add(c.id);
+    }
+    this.renderSelectBar();
+    this.renderMatrix();
+  }
+
+  private openMoveSelected(): void {
+    const book = this.book;
+    if (!book) return;
+    if (this.selectedChapterIds.size === 0) {
+      new Notice("请先勾选要移动的章节");
+      return;
+    }
+    const targets: { id: string; name: string; type: "volume" | "unit" }[] = [];
+    for (const v of collectVolumes(book.structure)) {
+      targets.push({ id: v.id, name: v.name, type: "volume" });
+    }
+    for (const u of collectUnits(book.structure)) {
+      targets.push({ id: u.id, name: u.name, type: "unit" });
+    }
+    new MoveNodeModal(this.app, {
+      targets,
+      onSelect: (targetId) => void this.doMoveSelected(targetId),
+    }).open();
+  }
+
+  private async doMoveSelected(targetId: string | null): Promise<void> {
+    const book = this.book;
+    if (!book) return;
+    const ordered = collectChapters(book.structure).filter((c) =>
+      this.selectedChapterIds.has(c.id)
+    );
+    if (ordered.length === 0) return;
+
+    if (targetId) {
+      const target = findNode(book.structure, targetId);
+      if (!target || target.type === "chapter") return;
+      for (const c of ordered) removeNode(book.structure, c.id);
+      target.children = target.children ?? [];
+      target.children.push(...ordered);
+      target.collapsed = false;
+      await this.syncNodeFiles(target);
+    } else {
+      for (const c of ordered) {
+        removeNode(book.structure, c.id);
+        book.structure.push(c);
+      }
+      for (const c of ordered) await this.syncNodeFiles(c);
+    }
+
+    this.selectedChapterIds.clear();
+    this.selectMode = false;
+    this.renderSelectBar();
+    await this.plugin.saveSettings();
+    this.render();
+  }
+
+  // -------------------------------------------------------------- view zoom
+
+  private get zoom(): number {
+    return this.settings.matrixZoom || 1;
+  }
+
+  private set zoom(z: number) {
+    this.settings.matrixZoom = z;
+  }
+
+  private isCompactViewport(): boolean {
+    return window.matchMedia(
+      "(max-width: 640px), (max-height: 500px) and (orientation: landscape)"
+    ).matches;
+  }
+
+  private buildZoomControl(): void {
+    const control = this.contentEl.createDiv("chs-zoom-control");
+    const minus = control.createEl("button", { text: "−", cls: "chs-zoom-btn" });
+    minus.setAttribute("aria-label", "缩小");
+    minus.addEventListener("click", () => this.changeZoom(-ZOOM_STEP));
+    this.zoomLabelEl = control.createSpan("chs-zoom-label");
+    this.zoomLabelEl.setText(Math.round(this.zoom * 100) + "%");
+    const plus = control.createEl("button", { text: "＋", cls: "chs-zoom-btn" });
+    plus.setAttribute("aria-label", "放大");
+    plus.addEventListener("click", () => this.changeZoom(ZOOM_STEP));
+    const reset = control.createEl("button", {
+      text: "重置",
+      cls: "chs-zoom-btn chs-zoom-reset",
+    });
+    reset.setAttribute("aria-label", "重置缩放");
+    reset.addEventListener("click", () => this.changeZoom(0));
+  }
+
+  private changeZoom(delta: number): void {
+    const next = delta === 0 ? 1 : this.zoom + delta;
+    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 10) / 10));
+    this.applyZoom();
+    void this.plugin.saveSettings();
+  }
+
+  private applyZoom(): void {
+    const z = this.zoom;
+    const compact = this.isCompactViewport();
+    const nodeW = Math.round((compact ? 140 : 200) * z);
+    const colW = Math.round((compact ? 120 : 150) * z);
+    this.contentEl.style.setProperty("--chs-node-w", nodeW + "px");
+    this.contentEl.style.setProperty("--chs-col-w", colW + "px");
+    this.contentEl.style.setProperty("--chs-zoom", String(z));
+    if (this.zoomLabelEl) this.zoomLabelEl.setText(Math.round(z * 100) + "%");
   }
 
   private deleteNode(nodeId: string): void {

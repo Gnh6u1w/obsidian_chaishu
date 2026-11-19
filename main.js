@@ -41,6 +41,7 @@ var DEFAULT_SETTINGS = {
   defaultStoragePath: "",
   activeBookId: "",
   outlineCollapsed: false,
+  matrixZoom: 1,
   books: []
 };
 var EMOTION_LEVELS = 5;
@@ -351,6 +352,20 @@ function collectUnits(nodes) {
     }
   }
   walk(nodes);
+  return out;
+}
+function collectUncollectedChapters(nodes) {
+  const out = [];
+  function walk(list, insideUnit) {
+    for (const n of list) {
+      if (n.type === "chapter") {
+        if (!insideUnit) out.push(n);
+      } else {
+        walk(n.children, n.type === "unit");
+      }
+    }
+  }
+  walk(nodes, false);
   return out;
 }
 function storageBase(book) {
@@ -1228,6 +1243,9 @@ var MoveNodeModal = class extends import_obsidian2.Modal {
 // matrix-view.ts
 var MAX_PREVIEW = 300;
 var SVG_NS2 = "http://www.w3.org/2000/svg";
+var ZOOM_MIN = 0.6;
+var ZOOM_MAX = 1.6;
+var ZOOM_STEP = 0.1;
 function makeSvg(tag, attrs) {
   const el = document.createElementNS(SVG_NS2, tag);
   for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
@@ -1362,6 +1380,8 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     this.buildBookInfo();
     this.buildToolbar();
     this.buildMatrix();
+    this.buildZoomControl();
+    this.applyZoom();
     if (prevScroll && this.matrixScrollEl) {
       this.matrixScrollEl.scrollLeft = prevScroll.left;
       this.matrixScrollEl.scrollTop = prevScroll.top;
@@ -2093,6 +2113,16 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     if (!this.selectMode) return;
     this.selectCountEl = this.selectBarEl.createSpan("chs-select-count");
     this.selectCountEl.setText("\u5DF2\u9009 " + this.selectedChapterIds.size + " \u7AE0");
+    const allBtn = this.selectBarEl.createEl("button", {
+      text: "\u5168\u9009",
+      cls: "chs-btn chs-btn-sm"
+    });
+    allBtn.addEventListener("click", () => this.selectAll());
+    const moveBtn = this.selectBarEl.createEl("button", {
+      text: "\u79FB\u52A8\u5230\u2026",
+      cls: "chs-btn chs-btn-sm"
+    });
+    moveBtn.addEventListener("click", () => void this.openMoveSelected());
     const collectBtn = this.selectBarEl.createEl("button", {
       text: "\uFF0B \u6536\u7EB3\u4E3A\u5355\u5143",
       cls: "chs-btn chs-btn-primary chs-btn-sm"
@@ -2136,6 +2166,113 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     this.renderSelectBar();
     await this.plugin.saveSettings();
     this.render();
+  }
+  // ----------------------------------------------- multi-select batch ops
+  selectAll() {
+    const book = this.book;
+    if (!book) return;
+    const uncollected = collectUncollectedChapters(book.structure);
+    const allSelected = uncollected.length > 0 && uncollected.every((c) => this.selectedChapterIds.has(c.id));
+    if (allSelected) {
+      for (const c of uncollected) this.selectedChapterIds.delete(c.id);
+    } else {
+      for (const c of uncollected) this.selectedChapterIds.add(c.id);
+    }
+    this.renderSelectBar();
+    this.renderMatrix();
+  }
+  openMoveSelected() {
+    const book = this.book;
+    if (!book) return;
+    if (this.selectedChapterIds.size === 0) {
+      new import_obsidian3.Notice("\u8BF7\u5148\u52FE\u9009\u8981\u79FB\u52A8\u7684\u7AE0\u8282");
+      return;
+    }
+    const targets = [];
+    for (const v of collectVolumes(book.structure)) {
+      targets.push({ id: v.id, name: v.name, type: "volume" });
+    }
+    for (const u of collectUnits(book.structure)) {
+      targets.push({ id: u.id, name: u.name, type: "unit" });
+    }
+    new MoveNodeModal(this.app, {
+      targets,
+      onSelect: (targetId) => void this.doMoveSelected(targetId)
+    }).open();
+  }
+  async doMoveSelected(targetId) {
+    var _a;
+    const book = this.book;
+    if (!book) return;
+    const ordered = collectChapters(book.structure).filter(
+      (c) => this.selectedChapterIds.has(c.id)
+    );
+    if (ordered.length === 0) return;
+    if (targetId) {
+      const target = findNode(book.structure, targetId);
+      if (!target || target.type === "chapter") return;
+      for (const c of ordered) removeNode(book.structure, c.id);
+      target.children = (_a = target.children) != null ? _a : [];
+      target.children.push(...ordered);
+      target.collapsed = false;
+      await this.syncNodeFiles(target);
+    } else {
+      for (const c of ordered) {
+        removeNode(book.structure, c.id);
+        book.structure.push(c);
+      }
+      for (const c of ordered) await this.syncNodeFiles(c);
+    }
+    this.selectedChapterIds.clear();
+    this.selectMode = false;
+    this.renderSelectBar();
+    await this.plugin.saveSettings();
+    this.render();
+  }
+  // -------------------------------------------------------------- view zoom
+  get zoom() {
+    return this.settings.matrixZoom || 1;
+  }
+  set zoom(z) {
+    this.settings.matrixZoom = z;
+  }
+  isCompactViewport() {
+    return window.matchMedia(
+      "(max-width: 640px), (max-height: 500px) and (orientation: landscape)"
+    ).matches;
+  }
+  buildZoomControl() {
+    const control = this.contentEl.createDiv("chs-zoom-control");
+    const minus = control.createEl("button", { text: "\u2212", cls: "chs-zoom-btn" });
+    minus.setAttribute("aria-label", "\u7F29\u5C0F");
+    minus.addEventListener("click", () => this.changeZoom(-ZOOM_STEP));
+    this.zoomLabelEl = control.createSpan("chs-zoom-label");
+    this.zoomLabelEl.setText(Math.round(this.zoom * 100) + "%");
+    const plus = control.createEl("button", { text: "\uFF0B", cls: "chs-zoom-btn" });
+    plus.setAttribute("aria-label", "\u653E\u5927");
+    plus.addEventListener("click", () => this.changeZoom(ZOOM_STEP));
+    const reset = control.createEl("button", {
+      text: "\u91CD\u7F6E",
+      cls: "chs-zoom-btn chs-zoom-reset"
+    });
+    reset.setAttribute("aria-label", "\u91CD\u7F6E\u7F29\u653E");
+    reset.addEventListener("click", () => this.changeZoom(0));
+  }
+  changeZoom(delta) {
+    const next = delta === 0 ? 1 : this.zoom + delta;
+    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 10) / 10));
+    this.applyZoom();
+    void this.plugin.saveSettings();
+  }
+  applyZoom() {
+    const z = this.zoom;
+    const compact = this.isCompactViewport();
+    const nodeW = Math.round((compact ? 140 : 200) * z);
+    const colW = Math.round((compact ? 120 : 150) * z);
+    this.contentEl.style.setProperty("--chs-node-w", nodeW + "px");
+    this.contentEl.style.setProperty("--chs-col-w", colW + "px");
+    this.contentEl.style.setProperty("--chs-zoom", String(z));
+    if (this.zoomLabelEl) this.zoomLabelEl.setText(Math.round(z * 100) + "%");
   }
   deleteNode(nodeId) {
     const book = this.book;
@@ -2812,11 +2949,11 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
       id: "return-matrix",
       name: "\u8FD4\u56DE\u62C6\u4E66\u77E9\u9635",
       callback: () => {
-        void this.activateView();
+        void this.returnToMatrix();
       }
     });
     this.registerObsidianProtocolHandler("chaishu-matrix-pro", () => {
-      void this.activateView();
+      void this.returnToMatrix();
     });
     this.registerMarkdownPostProcessor((el) => {
       el.querySelectorAll('a[href="obsidian://chaishu-matrix-pro"]').forEach((a) => {
@@ -2824,7 +2961,7 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
         a.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
-          void this.activateView();
+          void this.returnToMatrix();
         });
       });
     });
@@ -2870,6 +3007,27 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
     if (leaf) {
       await this.app.workspace.revealLeaf(leaf);
       this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    }
+  }
+  /**
+   * Return from an opened note: close the note leaf, then focus/reveal the
+   * matrix (V1.9 — prevents abandoned note tabs from piling up).
+   */
+  async returnToMatrix() {
+    var _a, _b;
+    const workspace = this.app.workspace;
+    const matrixLeaf = (_a = workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX)[0]) != null ? _a : null;
+    const activeLeaf = workspace.activeLeaf;
+    if (activeLeaf && activeLeaf !== matrixLeaf && ((_b = activeLeaf.view) == null ? void 0 : _b.getViewType()) !== VIEW_TYPE_CHAISHU_MATRIX) {
+      activeLeaf.detach();
+    }
+    if (matrixLeaf) {
+      await workspace.revealLeaf(matrixLeaf);
+      workspace.setActiveLeaf(matrixLeaf, { focus: true });
+    } else {
+      const leaf = workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
+      workspace.setActiveLeaf(leaf, { focus: true });
     }
   }
   getOpenView() {

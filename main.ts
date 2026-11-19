@@ -62,13 +62,13 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       id: "return-matrix",
       name: "返回拆书矩阵",
       callback: () => {
-        void this.activateView();
+        void this.returnToMatrix();
       },
     });
 
     // In-note return link: [🔙 返回拆书矩阵](obsidian://chaishu-matrix-pro)
     this.registerObsidianProtocolHandler("chaishu-matrix-pro", () => {
-      void this.activateView();
+      void this.returnToMatrix();
     });
 
     // Make the in-note return link a reliably-clickable button in Reading/Live Preview.
@@ -78,7 +78,7 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         a.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
-          void this.activateView();
+          void this.returnToMatrix();
         });
       });
     });
@@ -132,6 +132,34 @@ export default class ChaiShuMatrixPlugin extends Plugin {
     if (leaf) {
       await this.app.workspace.revealLeaf(leaf);
       this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    }
+  }
+
+  /**
+   * Return from an opened note: close the note leaf, then focus/reveal the
+   * matrix (V1.9 — prevents abandoned note tabs from piling up).
+   */
+  async returnToMatrix(): Promise<void> {
+    const workspace = this.app.workspace;
+    const matrixLeaf = workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX)[0] ?? null;
+    const activeLeaf = workspace.activeLeaf;
+
+    // Close the note leaf we are returning from (never the matrix itself).
+    if (
+      activeLeaf &&
+      activeLeaf !== matrixLeaf &&
+      activeLeaf.view?.getViewType() !== VIEW_TYPE_CHAISHU_MATRIX
+    ) {
+      activeLeaf.detach();
+    }
+
+    if (matrixLeaf) {
+      await workspace.revealLeaf(matrixLeaf);
+      workspace.setActiveLeaf(matrixLeaf, { focus: true });
+    } else {
+      const leaf = workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
+      workspace.setActiveLeaf(leaf, { focus: true });
     }
   }
 
