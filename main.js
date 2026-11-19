@@ -3670,6 +3670,30 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
       n.x = Math.max(-W, Math.min(W, n.x));
       n.y = Math.max(-H, Math.min(H, n.y));
     }
+    const minGap = 48;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = nodes.get(ids[i]);
+        const b = nodes.get(ids[j]);
+        let dx = a.x - b.x;
+        let dy = a.y - b.y;
+        let d = Math.sqrt(dx * dx + dy * dy);
+        if (d < minGap) {
+          if (d < 0.01) {
+            dx = Math.random() - 0.5;
+            dy = Math.random() - 0.5;
+            d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+          }
+          const push = (minGap - d) * 0.5;
+          const nx = dx / d;
+          const ny = dy / d;
+          a.x += nx * push;
+          a.y += ny * push;
+          b.x -= nx * push;
+          b.y -= ny * push;
+        }
+      }
+    }
   }
   toScreen(wx, wy) {
     var _a, _b;

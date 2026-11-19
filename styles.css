@@ -370,6 +370,15 @@
   box-sizing: border-box;
 }
 
+/* Freeze the header row (大纲/章节 corner + dimension labels) on vertical
+   scroll. thead-level sticky is the most reliable across desktop Chrome and
+   iOS Safari; the th-level `top:0` sticky below acts as a fallback. */
+.chs-matrix thead {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+}
+
 .chs-corner {
   position: sticky;
   top: 0;
