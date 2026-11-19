@@ -45,6 +45,9 @@ function yamlString(s: string): string {
 const RETURN_MARKER = "<!-- chs-return -->";
 const RETURN_LINK_MD = "[🔙 返回拆书矩阵](obsidian://chaishu-matrix-pro)";
 const RETURN_FOOTER = "\n\n---\n\n" + RETURN_MARKER + "\n" + RETURN_LINK_MD + "\n";
+// Character-note return link → 人设拆解 view (protocol "chaishu-character" in main.ts).
+const CHARACTER_RETURN_LINK_MD = "[🔙 返回人设拆解](obsidian://chaishu-character)";
+const CHARACTER_RETURN_FOOTER = "\n\n---\n\n" + RETURN_MARKER + "\n" + CHARACTER_RETURN_LINK_MD + "\n";
 
 /** Strip a previously-appended return-link footer so it never duplicates. */
 export function stripReturnFooter(body: string): string {
@@ -197,7 +200,6 @@ export function createNode(
     summaryFiles: {},
     children,
     collapsed: false,
-    hideContent: false,
     emotionData: [],
   };
 }
@@ -480,6 +482,66 @@ export async function createSummaryNote(
   const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
   await ensureFolder(vault, folderPath);
   const content = buildSummaryContent(book, nodeId, body);
+  const existing = vault.getAbstractFileByPath(filePath);
+  if (existing instanceof TFile) {
+    await vault.modify(existing, content);
+    return existing;
+  }
+  return await vault.create(filePath, content);
+}
+
+// -------------------------------------------------- 人设拆解 notes (V2.1)
+
+/** Archive path for a character dimension note:
+ *  存放位置/《书名》/人设/<角色名>-<人设维度>.md */
+export function buildCharacterPath(
+  book: BookData,
+  characterId: string,
+  dimensionName: string
+): string {
+  const character = book.characters.find((c) => c.id === characterId);
+  const name = character?.name ?? "角色";
+  const parts: string[] = [
+    bookFolderName(book.bookInfo.title),
+    "人设",
+    sanitizeFileName(name + "-" + dimensionName) + ".md",
+  ];
+  return joinVaultPath(storageBase(book), parts);
+}
+
+/** YAML + character return footer for a character dimension note. */
+export function buildCharacterContent(
+  book: BookData,
+  characterId: string,
+  dimension: Dimension,
+  body: string
+): string {
+  const character = book.characters.find((c) => c.id === characterId);
+  const lines = [
+    "---",
+    "类型: " + yamlString("人设"),
+    "角色名称: " + yamlString(character?.name ?? "角色"),
+    "人设维度: " + yamlString(dimension.name),
+    "拆书项目: " + yamlString(bookFolderName(book.bookInfo.title)),
+    "---",
+    "",
+  ];
+  const normalizedBody = stripReturnFooter(body ? body.replace(/\r\n/g, "\n") : "");
+  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "") + CHARACTER_RETURN_FOOTER;
+}
+
+/** Create (or overwrite) a character dimension note and return the TFile. */
+export async function createCharacterNote(
+  vault: Vault,
+  book: BookData,
+  characterId: string,
+  dimension: Dimension,
+  body: string
+): Promise<TFile> {
+  const filePath = buildCharacterPath(book, characterId, dimension.name);
+  const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
+  await ensureFolder(vault, folderPath);
+  const content = buildCharacterContent(book, characterId, dimension, body);
   const existing = vault.getAbstractFileByPath(filePath);
   if (existing instanceof TFile) {
     await vault.modify(existing, content);

@@ -14,7 +14,6 @@ import {
   DEFAULT_Y_AXIS_LABELS,
   DIMENSION_COLORS,
   Dimension,
-  ImportRequest,
   NodeData,
   VIEW_TYPE_CHAISHU_MATRIX,
 } from "./types";
@@ -44,7 +43,7 @@ import {
   ConfirmModal,
   DimensionModal,
   EmotionEditorModal,
-  ImportModal,
+  FuzzySearchModal,
   MoveNodeModal,
   PromptModal,
   StoragePathModal,
@@ -333,6 +332,32 @@ export class ChaiShuMatrixView extends ItemView {
       book.bookInfo.score = v;
       this.scheduleSave();
     });
+
+    // V2.1: 分类 (multi, custom) + 标签 (multi, free input).
+    this.buildChipField(
+      info,
+      "分类",
+      () => book.bookInfo.category,
+      (vals) => {
+        book.bookInfo.category = vals;
+        this.scheduleSave();
+      }
+    );
+    this.buildChipField(
+      info,
+      "标签",
+      () => book.bookInfo.tags,
+      (vals) => {
+        book.bookInfo.tags = vals;
+        this.scheduleSave();
+      }
+    );
+
+    const actions = info.createDiv("chs-bookinfo-actions");
+    const charBtn = actions.createEl("button", { text: "🎭 人设拆解", cls: "chs-btn" });
+    charBtn.addEventListener("click", () => void this.plugin.openCharacterView(book.id));
+    const searchBtn = actions.createEl("button", { text: "🔍 全局查询", cls: "chs-btn" });
+    searchBtn.addEventListener("click", () => this.openGlobalSearch());
   }
 
   private makeField(
@@ -349,6 +374,62 @@ export class ChaiShuMatrixView extends ItemView {
     input.setAttribute("placeholder", label);
     input.addEventListener("input", () => onChange(input.value));
     return input;
+  }
+
+  /** Chip/tag input: shows current values as removable chips + an inline add box. */
+  private buildChipField(
+    parent: HTMLElement,
+    label: string,
+    get: () => string[],
+    set: (vals: string[]) => void
+  ): void {
+    const field = parent.createDiv("chs-field chs-field-chips");
+    field.createSpan("chs-field-label").setText(label);
+    const chips = field.createDiv("chs-chips");
+
+    const render = () => {
+      const values = get();
+      chips.empty();
+      for (const v of values) {
+        const chip = chips.createSpan("chs-chip");
+        chip.setText(v);
+        const x = chip.createSpan("chs-chip-x");
+        x.setText("×");
+        x.addEventListener("click", () => {
+          set(values.filter((s) => s !== v));
+          render();
+        });
+      }
+      const input = chips.createEl("input", { type: "text" });
+      input.addClass("chs-chip-input");
+      input.setAttribute("placeholder", "＋ 添加");
+      const commit = () => {
+        const vals = get();
+        const v = sanitizeFileName(input.value.trim());
+        if (v && !vals.includes(v)) {
+          set([...vals, v]);
+          render();
+        }
+        input.value = "";
+      };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === ",") {
+          e.preventDefault();
+          commit();
+        }
+      });
+      input.addEventListener("blur", commit);
+    };
+    render();
+  }
+
+  private openGlobalSearch(): void {
+    const book = this.book;
+    if (!book) return;
+    new FuzzySearchModal(this.app, {
+      book,
+      onOpen: (path) => void this.openInEditor(path),
+    }).open();
   }
 
   private syncSelectText(): void {
@@ -385,15 +466,8 @@ export class ChaiShuMatrixView extends ItemView {
     addVol.addEventListener("click", () => this.addVolume());
     const addUnit = mid.createEl("button", { text: "＋ 添加小单元", cls: "chs-btn" });
     addUnit.addEventListener("click", () => this.addUnit());
-    const importBtn = mid.createEl("button", { text: "📥 导入", cls: "chs-btn" });
-    importBtn.addEventListener("click", () => this.openImportModal());
     const multiBtn = mid.createEl("button", { text: "☑ 多选", cls: "chs-btn" });
     multiBtn.addEventListener("click", () => this.setSelectMode(!this.selectMode));
-    const focusBtn = mid.createEl("button", {
-      text: this.settings.focusMode ? "👁 专注模式 开" : "👁 专注模式",
-      cls: "chs-btn",
-    });
-    focusBtn.addEventListener("click", () => this.toggleFocusMode());
 
     this.statsEl = tb.createDiv("chs-stats");
 
@@ -563,11 +637,6 @@ export class ChaiShuMatrixView extends ItemView {
         }
       }
       tr.createEl("td", { cls: "chs-cell-filler" });
-    } else if (this.settings.focusMode || node.hideContent) {
-      // V2.0 focus mode: hide the volume/unit dimension cells (keep the node row).
-      const hideTd = tr.createEl("td", { cls: "chs-summary chs-hidden-content" });
-      hideTd.setAttribute("colspan", String(book.dimensions.length + 1));
-      hideTd.createSpan("chs-summary-hint").setText("已隐藏维度内容");
     } else {
       // V2.0: volume/unit rows mirror chapter rows — one cell per dimension.
       // Non-chart dimensions link to per-dimension summary notes; the chart
@@ -1029,22 +1098,6 @@ export class ChaiShuMatrixView extends ItemView {
     this.renderMatrix();
   }
 
-  private toggleHideContent(nodeId: string): void {
-    const book = this.book;
-    if (!book) return;
-    const node = findNode(book.structure, nodeId);
-    if (!node || node.type === "chapter") return;
-    node.hideContent = !node.hideContent;
-    void this.plugin.saveSettings();
-    this.renderMatrix();
-  }
-
-  private toggleFocusMode(): void {
-    this.settings.focusMode = !this.settings.focusMode;
-    void this.plugin.saveSettings();
-    this.render();
-  }
-
   // ---------------------------------------------------------------- nodes
 
   private addChapters(n: number): void {
@@ -1354,12 +1407,6 @@ export class ChaiShuMatrixView extends ItemView {
           .setIcon("chevrons-up-down")
           .onClick(() => this.toggleNode(nodeId))
       );
-      menu.addItem((i) =>
-        i
-          .setTitle(node.hideContent ? "显示该行维度内容" : "隐藏该行维度内容")
-          .setIcon("eye-off")
-          .onClick(() => this.toggleHideContent(nodeId))
-      );
     }
     if (node.type === "chapter") {
       menu.addItem((i) =>
@@ -1667,72 +1714,6 @@ export class ChaiShuMatrixView extends ItemView {
     }).open();
   }
 
-  // ---------------------------------------------------------- import
-
-  private openImportModal(): void {
-    const book = this.book;
-    if (!book) return;
-    const chapters = collectChapters(book.structure).map((c) => ({ id: c.id, name: c.name }));
-    const dimensions = book.dimensions.filter((d) => !d.isChart).map((d) => ({ id: d.id, name: d.name }));
-    if (chapters.length === 0) {
-      new Notice("请先添加章节");
-      return;
-    }
-    if (dimensions.length === 0) {
-      new Notice("请先添加维度");
-      return;
-    }
-    new ImportModal(this.app, {
-      chapters,
-      dimensions,
-      onImport: (req) => void this.handleImport(req),
-    }).open();
-  }
-
-  private async handleImport(req: ImportRequest): Promise<void> {
-    const book = this.book;
-    if (!book) return;
-    const chapter = findNode(book.structure, req.chapterId);
-    const dim = book.dimensions.find((d) => d.id === req.dimensionId);
-    if (!chapter || !dim || dim.isChart) {
-      new Notice("目标章节或维度无效");
-      return;
-    }
-    const key = cellKey(chapter.id, dim.id);
-    try {
-      if (req.sourceType === "external") {
-        const body = stripFrontmatter(req.content ?? "");
-        const file = await createChapterNote(this.app.vault, book, chapter.id, dim, body);
-        const cell = book.cells[key] ?? (book.cells[key] = { filePath: "", hasContent: false });
-        cell.filePath = file.path;
-        cell.hasContent = body.trim().length > 0;
-      } else {
-        const srcFile = req.vaultPath
-          ? this.app.vault.getAbstractFileByPath(req.vaultPath)
-          : null;
-        if (!(srcFile instanceof TFile)) {
-          new Notice("找不到库内笔记");
-          return;
-        }
-        const targetPath = buildChapterPath(book, chapter.id, dim.name);
-        let file = srcFile;
-        if (req.move && srcFile.path !== targetPath) {
-          await this.app.fileManager.renameFile(srcFile, targetPath);
-          const moved = this.app.vault.getAbstractFileByPath(targetPath);
-          if (moved instanceof TFile) file = moved;
-        }
-        const cell = book.cells[key] ?? (book.cells[key] = { filePath: "", hasContent: false });
-        cell.filePath = file.path;
-        cell.hasContent = true;
-      }
-      await this.plugin.saveSettings();
-      this.renderMatrix();
-      new Notice("导入成功");
-    } catch (e) {
-      new Notice("导入失败");
-    }
-  }
-
   // -------------------------------------------------------- book settings
 
   private openBookSettingsMenu(btn: HTMLElement): void {
@@ -1779,50 +1760,8 @@ export class ChaiShuMatrixView extends ItemView {
 
   openCreateBook(): void {
     new BookCreateModal(this.app, async (title, author) => {
-      const settings = this.settings;
-      const dims = settings.defaultDimensionNames.split(/[,，、\s]+/).filter(Boolean);
-      const dimensions: Dimension[] = dims.map((name, i) => ({
-        id: uid("d"),
-        name: sanitizeFileName(name),
-        color: DIMENSION_COLORS[i % DIMENSION_COLORS.length],
-        isChart: name === "情绪",
-        yAxisLabels: [...DEFAULT_Y_AXIS_LABELS],
-      }));
-      const count = Math.max(1, Math.min(500, settings.defaultChapterCount || 5));
-      const structure: NodeData[] = [];
-      for (let i = 1; i <= count; i++) {
-        structure.push(createNode("chapter", "第" + i + "章"));
-      }
-
-      const book: BookData = {
-        id: uid("book"),
-        bookInfo: {
-          title,
-          author,
-          score: "",
-          bgImage: "",
-          bgMode: "cover",
-          bgOverlay: 0.3,
-        },
-        storagePath: settings.defaultStoragePath || "",
-        dimensions: dimensions.length
-          ? dimensions
-          : [
-              {
-                id: uid("d"),
-                name: "情绪",
-                color: DIMENSION_COLORS[0],
-                isChart: true,
-                yAxisLabels: [...DEFAULT_Y_AXIS_LABELS],
-              },
-            ],
-        structure,
-        cells: {},
-      };
-      settings.books.push(book);
-      settings.activeBookId = book.id;
+      const book = await this.plugin.createBook(title, author);
       this.activeBookId = book.id;
-      await this.plugin.saveSettings();
       this.render();
     }).open();
   }

@@ -28,13 +28,15 @@ __export(main_exports, {
   default: () => ChaiShuMatrixPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian5 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 
 // matrix-view.ts
 var import_obsidian3 = require("obsidian");
 
 // types.ts
 var VIEW_TYPE_CHAISHU_MATRIX = "chaishu-matrix-pro-view";
+var VIEW_TYPE_CHAISHU_DASHBOARD = "chaishu-dashboard-view";
+var VIEW_TYPE_CHAISHU_CHARACTER = "chaishu-character-view";
 var DEFAULT_SETTINGS = {
   defaultChapterCount: 5,
   defaultDimensionNames: "\u60C5\u7EEA,\u957F\u671F\u671F\u5F85,\u4E2D\u671F\u671F\u5F85,\u51B2\u7A81",
@@ -42,7 +44,6 @@ var DEFAULT_SETTINGS = {
   activeBookId: "",
   outlineCollapsed: false,
   matrixZoom: 1,
-  focusMode: false,
   cellWidth: 150,
   cellHeight: 72,
   books: []
@@ -110,6 +111,8 @@ function yamlString(s) {
 var RETURN_MARKER = "<!-- chs-return -->";
 var RETURN_LINK_MD = "[\u{1F519} \u8FD4\u56DE\u62C6\u4E66\u77E9\u9635](obsidian://chaishu-matrix-pro)";
 var RETURN_FOOTER = "\n\n---\n\n" + RETURN_MARKER + "\n" + RETURN_LINK_MD + "\n";
+var CHARACTER_RETURN_LINK_MD = "[\u{1F519} \u8FD4\u56DE\u4EBA\u8BBE\u62C6\u89E3](obsidian://chaishu-character)";
+var CHARACTER_RETURN_FOOTER = "\n\n---\n\n" + RETURN_MARKER + "\n" + CHARACTER_RETURN_LINK_MD + "\n";
 function stripReturnFooter(body) {
   const idx = body.indexOf(RETURN_MARKER);
   return (idx === -1 ? body : body.slice(0, idx)).replace(/\s+$/, "");
@@ -270,7 +273,6 @@ function createNode(type, name, children = []) {
     summaryFiles: {},
     children,
     collapsed: false,
-    hideContent: false,
     emotionData: []
   };
 }
@@ -438,6 +440,44 @@ function normalizeYAxisLabels(labels) {
     out.push(typeof v === "string" && v.trim() ? v.trim() : DEFAULT_Y_AXIS_LABELS[i]);
   }
   return out;
+}
+function buildCharacterPath(book, characterId, dimensionName) {
+  var _a;
+  const character = book.characters.find((c) => c.id === characterId);
+  const name = (_a = character == null ? void 0 : character.name) != null ? _a : "\u89D2\u8272";
+  const parts = [
+    bookFolderName(book.bookInfo.title),
+    "\u4EBA\u8BBE",
+    sanitizeFileName(name + "-" + dimensionName) + ".md"
+  ];
+  return joinVaultPath(storageBase(book), parts);
+}
+function buildCharacterContent(book, characterId, dimension, body) {
+  var _a;
+  const character = book.characters.find((c) => c.id === characterId);
+  const lines = [
+    "---",
+    "\u7C7B\u578B: " + yamlString("\u4EBA\u8BBE"),
+    "\u89D2\u8272\u540D\u79F0: " + yamlString((_a = character == null ? void 0 : character.name) != null ? _a : "\u89D2\u8272"),
+    "\u4EBA\u8BBE\u7EF4\u5EA6: " + yamlString(dimension.name),
+    "\u62C6\u4E66\u9879\u76EE: " + yamlString(bookFolderName(book.bookInfo.title)),
+    "---",
+    ""
+  ];
+  const normalizedBody = stripReturnFooter(body ? body.replace(/\r\n/g, "\n") : "");
+  return lines.join("\n") + (normalizedBody ? normalizedBody + "\n" : "") + CHARACTER_RETURN_FOOTER;
+}
+async function createCharacterNote(vault, book, characterId, dimension, body) {
+  const filePath = buildCharacterPath(book, characterId, dimension.name);
+  const folderPath = filePath.slice(0, filePath.lastIndexOf("/"));
+  await ensureFolder(vault, folderPath);
+  const content = buildCharacterContent(book, characterId, dimension, body);
+  const existing = vault.getAbstractFileByPath(filePath);
+  if (existing instanceof import_obsidian.TFile) {
+    await vault.modify(existing, content);
+    return existing;
+  }
+  return await vault.create(filePath, content);
 }
 function buildSummaryDimPath(book, nodeId, dimensionName) {
   const ctx = findNodeContext(book.structure, nodeId);
@@ -808,131 +848,6 @@ var WallpaperModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
 };
-var NoteSuggestModal = class extends import_obsidian2.FuzzySuggestModal {
-  constructor(app, onChoose) {
-    super(app);
-    this.onChoose = onChoose;
-  }
-  getItems() {
-    return this.app.vault.getMarkdownFiles();
-  }
-  getItemText(item) {
-    return item.path;
-  }
-  onChooseItem(item) {
-    this.onChoose(item);
-  }
-};
-var ImportModal = class extends import_obsidian2.Modal {
-  constructor(app, opts) {
-    var _a, _b, _c, _d;
-    super(app);
-    this.opts = opts;
-    this.sourceType = null;
-    this.sourceName = "";
-    this.content = "";
-    this.vaultPath = "";
-    this.chapterId = "";
-    this.dimensionId = "";
-    this.move = true;
-    this.chapterId = (_b = (_a = opts.chapters[0]) == null ? void 0 : _a.id) != null ? _b : "";
-    this.dimensionId = (_d = (_c = opts.dimensions[0]) == null ? void 0 : _c.id) != null ? _d : "";
-  }
-  onOpen() {
-    this.render();
-  }
-  render() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("chs-modal");
-    contentEl.createEl("h2", { text: "\u5BFC\u5165\u7B14\u8BB0" });
-    const srcRow = contentEl.createDiv("chs-modal-actions");
-    const extBtn = srcRow.createEl("button", { cls: "chs-btn", text: "\u5BFC\u5165\u672C\u5730\u6587\u4EF6 (.md/.txt)" });
-    extBtn.addEventListener("click", () => this.pickFile());
-    const vaultBtn = srcRow.createEl("button", { cls: "chs-btn", text: "\u4ECE\u5E93\u4E2D\u9009\u62E9\u7B14\u8BB0" });
-    vaultBtn.addEventListener("click", () => this.pickVaultNote());
-    this.statusEl = contentEl.createDiv("chs-import-status");
-    this.updateStatus();
-    new import_obsidian2.Setting(contentEl).setName("\u76EE\u6807\u7AE0\u8282").addDropdown((d) => {
-      for (const c of this.opts.chapters) d.addOption(c.id, c.name);
-      d.setValue(this.chapterId);
-      d.onChange((v) => this.chapterId = v);
-    });
-    new import_obsidian2.Setting(contentEl).setName("\u76EE\u6807\u7EF4\u5EA6").addDropdown((d) => {
-      for (const dm of this.opts.dimensions) d.addOption(dm.id, dm.name);
-      d.setValue(this.dimensionId);
-      d.onChange((v) => this.dimensionId = v);
-    });
-    if (this.sourceType === "vault") {
-      new import_obsidian2.Setting(contentEl).setName("\u79FB\u52A8\u5230\u62C6\u4E66\u6587\u4EF6\u5939").setDesc("\u82E5\u7B14\u8BB0\u4E0D\u5728\u62C6\u4E66\u6587\u4EF6\u5939\u4E2D\uFF0C\u5BFC\u5165\u65F6\u5C06\u5176\u79FB\u52A8\u8FC7\u53BB").addToggle((t) => t.setValue(this.move).onChange((v) => this.move = v));
-    }
-    const footer = contentEl.createDiv("chs-modal-actions");
-    new import_obsidian2.ButtonComponent(footer).setButtonText("\u53D6\u6D88").onClick(() => this.close());
-    new import_obsidian2.ButtonComponent(footer).setButtonText("\u5BFC\u5165").setCta().onClick(() => this.submit());
-  }
-  pickFile() {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".md,.txt,text/markdown,text/plain";
-    input.addEventListener("change", async () => {
-      var _a;
-      const f = (_a = input.files) == null ? void 0 : _a[0];
-      if (!f) return;
-      this.sourceType = "external";
-      this.sourceName = f.name;
-      this.content = await f.text();
-      this.render();
-    });
-    input.click();
-  }
-  pickVaultNote() {
-    new NoteSuggestModal(this.app, (file) => {
-      this.sourceType = "vault";
-      this.sourceName = file.name;
-      this.vaultPath = file.path;
-      this.content = "";
-      this.render();
-    }).open();
-  }
-  updateStatus() {
-    if (!this.statusEl) return;
-    this.statusEl.empty();
-    if (!this.sourceType) {
-      this.statusEl.setText("\u5C1A\u672A\u9009\u62E9\u6765\u6E90\u7B14\u8BB0");
-    } else if (this.sourceType === "external") {
-      this.statusEl.setText("\u5DF2\u9009\u6587\u4EF6\uFF1A" + this.sourceName);
-    } else {
-      this.statusEl.setText("\u5DF2\u9009\u5E93\u5185\u7B14\u8BB0\uFF1A" + this.vaultPath);
-    }
-  }
-  submit() {
-    if (!this.sourceType) {
-      new import_obsidian2.Notice("\u8BF7\u5148\u9009\u62E9\u6765\u6E90\u7B14\u8BB0");
-      return;
-    }
-    if (!this.chapterId) {
-      new import_obsidian2.Notice("\u8BF7\u9009\u62E9\u76EE\u6807\u7AE0\u8282");
-      return;
-    }
-    if (!this.dimensionId) {
-      new import_obsidian2.Notice("\u8BF7\u9009\u62E9\u76EE\u6807\u7EF4\u5EA6");
-      return;
-    }
-    this.close();
-    this.opts.onImport({
-      sourceType: this.sourceType,
-      sourceName: this.sourceName,
-      content: this.sourceType === "external" ? this.content : void 0,
-      vaultPath: this.sourceType === "vault" ? this.vaultPath : void 0,
-      chapterId: this.chapterId,
-      dimensionId: this.dimensionId,
-      move: this.move
-    });
-  }
-  onClose() {
-    this.contentEl.empty();
-  }
-};
 var EmotionEditorModal = class extends import_obsidian2.Modal {
   constructor(app, opts) {
     super(app);
@@ -1238,6 +1153,119 @@ var MoveNodeModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
 };
+var FuzzySearchModal = class extends import_obsidian2.Modal {
+  constructor(app, opts) {
+    super(app);
+    this.items = [];
+    this.timer = null;
+    this.book = opts.book;
+    this.openNote = opts.onOpen;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-modal", "chs-search-modal");
+    contentEl.createEl("h2", { text: "\u5168\u5C40\u67E5\u8BE2 \xB7 " + this.book.bookInfo.title });
+    this.input = contentEl.createEl("input", { type: "text" });
+    this.input.addClass("chs-search-input");
+    this.input.setAttribute("placeholder", "\u641C\u7D22\u7B14\u8BB0\u5185\u5BB9\uFF0C\u5982\uFF1A\u4E3B\u89D2 \u7A7F\u8D8A");
+    this.input.addEventListener("input", () => this.scheduleSearch());
+    this.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const first = this.list.querySelector(".chs-search-item");
+        first == null ? void 0 : first.click();
+      }
+    });
+    this.list = contentEl.createDiv("chs-search-results");
+    this.list.createDiv("chs-search-empty").setText("\u52A0\u8F7D\u7D22\u5F15\u4E2D\u2026");
+    window.setTimeout(() => this.input.focus(), 50);
+    void this.loadIndex();
+  }
+  async loadIndex() {
+    var _a, _b, _c, _d;
+    const book = this.book;
+    const meta = /* @__PURE__ */ new Map();
+    for (const ch of collectChapters(book.structure)) {
+      for (const d of book.dimensions) {
+        if (d.isChart) continue;
+        const c = book.cells[cellKey(ch.id, d.id)];
+        if (c == null ? void 0 : c.filePath) meta.set(c.filePath, { label: ch.name + " \xB7 " + d.name, detail: "\u7AE0\u8282\u7B14\u8BB0" });
+      }
+    }
+    for (const n of [...collectVolumes(book.structure), ...collectUnits(book.structure)]) {
+      for (const d of book.dimensions) {
+        if (d.isChart) continue;
+        const p = (_a = n.summaryFiles) == null ? void 0 : _a[d.id];
+        if (p) {
+          meta.set(p, {
+            label: n.name + " \xB7 " + d.name + "\u603B\u7ED3",
+            detail: n.type === "volume" ? "\u5377\u603B\u7ED3" : "\u5355\u5143\u603B\u7ED3"
+          });
+        }
+      }
+    }
+    for (const ch of (_b = book.characters) != null ? _b : []) {
+      for (const d of (_c = book.characterDimensions) != null ? _c : []) {
+        const c = (_d = book.characterCells) == null ? void 0 : _d[cellKey(ch.id, d.id)];
+        if (c == null ? void 0 : c.filePath) meta.set(c.filePath, { label: ch.name + " \xB7 " + d.name, detail: "\u4EBA\u8BBE\u7B14\u8BB0" });
+      }
+    }
+    this.items = [];
+    for (const [path, m] of meta) {
+      const f = this.app.vault.getAbstractFileByPath(path);
+      if (!(f instanceof import_obsidian2.TFile)) continue;
+      let body = "";
+      try {
+        body = await this.app.vault.cachedRead(f);
+      } catch (e) {
+      }
+      this.items.push({ path, label: m.label, detail: m.detail, body });
+    }
+    this.runSearch(this.input.value);
+  }
+  scheduleSearch() {
+    if (this.timer !== null) window.clearTimeout(this.timer);
+    this.timer = window.setTimeout(() => {
+      this.timer = null;
+      this.runSearch(this.input.value);
+    }, 150);
+  }
+  runSearch(query) {
+    this.list.empty();
+    const q = query.trim().toLowerCase();
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const results = this.items.filter((it) => {
+      if (tokens.length === 0) return true;
+      const hay = (it.label + "\n" + it.detail + "\n" + it.body).toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    });
+    if (results.length === 0) {
+      this.list.createDiv("chs-search-empty").setText(q ? "\u65E0\u5339\u914D\u7ED3\u679C" : "\u6682\u65E0\u7B14\u8BB0");
+      return;
+    }
+    for (const it of results.slice(0, 50)) {
+      const item = this.list.createDiv("chs-search-item");
+      item.createDiv("chs-search-item-label").setText(it.label);
+      item.createDiv("chs-search-item-detail").setText(it.detail);
+      if (tokens.length > 0) {
+        const idx = it.body.toLowerCase().indexOf(tokens[0]);
+        if (idx >= 0) {
+          const start = Math.max(0, idx - 20);
+          const snippet = it.body.slice(start, start + 80).replace(/\s+/g, " ");
+          item.createDiv("chs-search-item-snippet").setText((start > 0 ? "\u2026" : "") + snippet + "\u2026");
+        }
+      }
+      item.addEventListener("click", () => {
+        this.close();
+        this.openNote(it.path);
+      });
+    }
+  }
+  onClose() {
+    if (this.timer !== null) window.clearTimeout(this.timer);
+    this.contentEl.empty();
+  }
+};
 
 // matrix-view.ts
 var MAX_PREVIEW = 300;
@@ -1475,6 +1503,29 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       book.bookInfo.score = v;
       this.scheduleSave();
     });
+    this.buildChipField(
+      info,
+      "\u5206\u7C7B",
+      () => book.bookInfo.category,
+      (vals) => {
+        book.bookInfo.category = vals;
+        this.scheduleSave();
+      }
+    );
+    this.buildChipField(
+      info,
+      "\u6807\u7B7E",
+      () => book.bookInfo.tags,
+      (vals) => {
+        book.bookInfo.tags = vals;
+        this.scheduleSave();
+      }
+    );
+    const actions = info.createDiv("chs-bookinfo-actions");
+    const charBtn = actions.createEl("button", { text: "\u{1F3AD} \u4EBA\u8BBE\u62C6\u89E3", cls: "chs-btn" });
+    charBtn.addEventListener("click", () => void this.plugin.openCharacterView(book.id));
+    const searchBtn = actions.createEl("button", { text: "\u{1F50D} \u5168\u5C40\u67E5\u8BE2", cls: "chs-btn" });
+    searchBtn.addEventListener("click", () => this.openGlobalSearch());
   }
   makeField(parent, label, value, onChange) {
     const field = parent.createDiv("chs-field");
@@ -1485,6 +1536,54 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     input.setAttribute("placeholder", label);
     input.addEventListener("input", () => onChange(input.value));
     return input;
+  }
+  /** Chip/tag input: shows current values as removable chips + an inline add box. */
+  buildChipField(parent, label, get, set) {
+    const field = parent.createDiv("chs-field chs-field-chips");
+    field.createSpan("chs-field-label").setText(label);
+    const chips = field.createDiv("chs-chips");
+    const render = () => {
+      const values = get();
+      chips.empty();
+      for (const v of values) {
+        const chip = chips.createSpan("chs-chip");
+        chip.setText(v);
+        const x = chip.createSpan("chs-chip-x");
+        x.setText("\xD7");
+        x.addEventListener("click", () => {
+          set(values.filter((s) => s !== v));
+          render();
+        });
+      }
+      const input = chips.createEl("input", { type: "text" });
+      input.addClass("chs-chip-input");
+      input.setAttribute("placeholder", "\uFF0B \u6DFB\u52A0");
+      const commit = () => {
+        const vals = get();
+        const v = sanitizeFileName(input.value.trim());
+        if (v && !vals.includes(v)) {
+          set([...vals, v]);
+          render();
+        }
+        input.value = "";
+      };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === ",") {
+          e.preventDefault();
+          commit();
+        }
+      });
+      input.addEventListener("blur", commit);
+    };
+    render();
+  }
+  openGlobalSearch() {
+    const book = this.book;
+    if (!book) return;
+    new FuzzySearchModal(this.app, {
+      book,
+      onOpen: (path) => void this.openInEditor(path)
+    }).open();
   }
   syncSelectText() {
     const book = this.book;
@@ -1516,15 +1615,8 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     addVol.addEventListener("click", () => this.addVolume());
     const addUnit = mid.createEl("button", { text: "\uFF0B \u6DFB\u52A0\u5C0F\u5355\u5143", cls: "chs-btn" });
     addUnit.addEventListener("click", () => this.addUnit());
-    const importBtn = mid.createEl("button", { text: "\u{1F4E5} \u5BFC\u5165", cls: "chs-btn" });
-    importBtn.addEventListener("click", () => this.openImportModal());
     const multiBtn = mid.createEl("button", { text: "\u2611 \u591A\u9009", cls: "chs-btn" });
     multiBtn.addEventListener("click", () => this.setSelectMode(!this.selectMode));
-    const focusBtn = mid.createEl("button", {
-      text: this.settings.focusMode ? "\u{1F441} \u4E13\u6CE8\u6A21\u5F0F \u5F00" : "\u{1F441} \u4E13\u6CE8\u6A21\u5F0F",
-      cls: "chs-btn"
-    });
-    focusBtn.addEventListener("click", () => this.toggleFocusMode());
     this.statsEl = tb.createDiv("chs-stats");
     this.selectBarEl = this.wrapEl.createDiv("chs-selectbar");
     this.renderSelectBar();
@@ -1666,10 +1758,6 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
         }
       }
       tr.createEl("td", { cls: "chs-cell-filler" });
-    } else if (this.settings.focusMode || node.hideContent) {
-      const hideTd = tr.createEl("td", { cls: "chs-summary chs-hidden-content" });
-      hideTd.setAttribute("colspan", String(book.dimensions.length + 1));
-      hideTd.createSpan("chs-summary-hint").setText("\u5DF2\u9690\u85CF\u7EF4\u5EA6\u5185\u5BB9");
     } else {
       for (const dim of book.dimensions) {
         const td = tr.createEl("td", { cls: "chs-cell chs-summary-dim" });
@@ -2073,20 +2161,6 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     void this.plugin.saveSettings();
     this.renderMatrix();
   }
-  toggleHideContent(nodeId) {
-    const book = this.book;
-    if (!book) return;
-    const node = findNode(book.structure, nodeId);
-    if (!node || node.type === "chapter") return;
-    node.hideContent = !node.hideContent;
-    void this.plugin.saveSettings();
-    this.renderMatrix();
-  }
-  toggleFocusMode() {
-    this.settings.focusMode = !this.settings.focusMode;
-    void this.plugin.saveSettings();
-    this.render();
-  }
   // ---------------------------------------------------------------- nodes
   addChapters(n) {
     const book = this.book;
@@ -2351,9 +2425,6 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
     if (node.type !== "chapter") {
       menu.addItem(
         (i) => i.setTitle(node.collapsed ? "\u5C55\u5F00" : "\u6298\u53E0").setIcon("chevrons-up-down").onClick(() => this.toggleNode(nodeId))
-      );
-      menu.addItem(
-        (i) => i.setTitle(node.hideContent ? "\u663E\u793A\u8BE5\u884C\u7EF4\u5EA6\u5185\u5BB9" : "\u9690\u85CF\u8BE5\u884C\u7EF4\u5EA6\u5185\u5BB9").setIcon("eye-off").onClick(() => this.toggleHideContent(nodeId))
       );
     }
     if (node.type === "chapter") {
@@ -2632,68 +2703,6 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       }
     }).open();
   }
-  // ---------------------------------------------------------- import
-  openImportModal() {
-    const book = this.book;
-    if (!book) return;
-    const chapters = collectChapters(book.structure).map((c) => ({ id: c.id, name: c.name }));
-    const dimensions = book.dimensions.filter((d) => !d.isChart).map((d) => ({ id: d.id, name: d.name }));
-    if (chapters.length === 0) {
-      new import_obsidian3.Notice("\u8BF7\u5148\u6DFB\u52A0\u7AE0\u8282");
-      return;
-    }
-    if (dimensions.length === 0) {
-      new import_obsidian3.Notice("\u8BF7\u5148\u6DFB\u52A0\u7EF4\u5EA6");
-      return;
-    }
-    new ImportModal(this.app, {
-      chapters,
-      dimensions,
-      onImport: (req) => void this.handleImport(req)
-    }).open();
-  }
-  async handleImport(req) {
-    var _a, _b, _c;
-    const book = this.book;
-    if (!book) return;
-    const chapter = findNode(book.structure, req.chapterId);
-    const dim = book.dimensions.find((d) => d.id === req.dimensionId);
-    if (!chapter || !dim || dim.isChart) {
-      new import_obsidian3.Notice("\u76EE\u6807\u7AE0\u8282\u6216\u7EF4\u5EA6\u65E0\u6548");
-      return;
-    }
-    const key = cellKey(chapter.id, dim.id);
-    try {
-      if (req.sourceType === "external") {
-        const body = stripFrontmatter((_a = req.content) != null ? _a : "");
-        const file = await createChapterNote(this.app.vault, book, chapter.id, dim, body);
-        const cell = (_b = book.cells[key]) != null ? _b : book.cells[key] = { filePath: "", hasContent: false };
-        cell.filePath = file.path;
-        cell.hasContent = body.trim().length > 0;
-      } else {
-        const srcFile = req.vaultPath ? this.app.vault.getAbstractFileByPath(req.vaultPath) : null;
-        if (!(srcFile instanceof import_obsidian3.TFile)) {
-          new import_obsidian3.Notice("\u627E\u4E0D\u5230\u5E93\u5185\u7B14\u8BB0");
-          return;
-        }
-        const targetPath = buildChapterPath(book, chapter.id, dim.name);
-        let file = srcFile;
-        if (req.move && srcFile.path !== targetPath) {
-          await this.app.fileManager.renameFile(srcFile, targetPath);
-          const moved = this.app.vault.getAbstractFileByPath(targetPath);
-          if (moved instanceof import_obsidian3.TFile) file = moved;
-        }
-        const cell = (_c = book.cells[key]) != null ? _c : book.cells[key] = { filePath: "", hasContent: false };
-        cell.filePath = file.path;
-        cell.hasContent = true;
-      }
-      await this.plugin.saveSettings();
-      this.renderMatrix();
-      new import_obsidian3.Notice("\u5BFC\u5165\u6210\u529F");
-    } catch (e) {
-      new import_obsidian3.Notice("\u5BFC\u5165\u5931\u8D25");
-    }
-  }
   // -------------------------------------------------------- book settings
   openBookSettingsMenu(btn) {
     const menu = new import_obsidian3.Menu();
@@ -2736,47 +2745,8 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
   }
   openCreateBook() {
     new BookCreateModal(this.app, async (title, author) => {
-      const settings = this.settings;
-      const dims = settings.defaultDimensionNames.split(/[,，、\s]+/).filter(Boolean);
-      const dimensions = dims.map((name, i) => ({
-        id: uid("d"),
-        name: sanitizeFileName(name),
-        color: DIMENSION_COLORS[i % DIMENSION_COLORS.length],
-        isChart: name === "\u60C5\u7EEA",
-        yAxisLabels: [...DEFAULT_Y_AXIS_LABELS]
-      }));
-      const count = Math.max(1, Math.min(500, settings.defaultChapterCount || 5));
-      const structure = [];
-      for (let i = 1; i <= count; i++) {
-        structure.push(createNode("chapter", "\u7B2C" + i + "\u7AE0"));
-      }
-      const book = {
-        id: uid("book"),
-        bookInfo: {
-          title,
-          author,
-          score: "",
-          bgImage: "",
-          bgMode: "cover",
-          bgOverlay: 0.3
-        },
-        storagePath: settings.defaultStoragePath || "",
-        dimensions: dimensions.length ? dimensions : [
-          {
-            id: uid("d"),
-            name: "\u60C5\u7EEA",
-            color: DIMENSION_COLORS[0],
-            isChart: true,
-            yAxisLabels: [...DEFAULT_Y_AXIS_LABELS]
-          }
-        ],
-        structure,
-        cells: {}
-      };
-      settings.books.push(book);
-      settings.activeBookId = book.id;
+      const book = await this.plugin.createBook(title, author);
       this.activeBookId = book.id;
-      await this.plugin.saveSettings();
       this.render();
     }).open();
   }
@@ -2850,9 +2820,569 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
   }
 };
 
-// settings.ts
+// character-view.ts
 var import_obsidian4 = require("obsidian");
-var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
+var MAX_PREVIEW2 = 200;
+var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.bookId = "";
+    this.observer = null;
+    this.plugin = plugin;
+  }
+  getViewType() {
+    return VIEW_TYPE_CHAISHU_CHARACTER;
+  }
+  getDisplayText() {
+    return "\u4EBA\u8BBE\u62C6\u89E3";
+  }
+  getIcon() {
+    return "users";
+  }
+  get settings() {
+    return this.plugin.getSettings();
+  }
+  get book() {
+    var _a;
+    return (_a = this.settings.books.find((b) => b.id === this.bookId)) != null ? _a : null;
+  }
+  async onOpen() {
+    this.bookId = this.settings.activeBookId;
+    this.render();
+  }
+  async onClose() {
+    var _a;
+    (_a = this.observer) == null ? void 0 : _a.disconnect();
+    this.observer = null;
+    this.contentEl.empty();
+  }
+  /** Called by the plugin when re-opening this view for a different book. */
+  setBook(bookId) {
+    this.bookId = bookId;
+    this.render();
+  }
+  render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-view", "chs-character-view");
+    const book = this.book;
+    if (!book) {
+      contentEl.createDiv("chs-empty").createDiv("chs-empty-title").setText("\u6CA1\u6709\u62C6\u4E66\u9879\u76EE");
+      return;
+    }
+    const top = contentEl.createDiv("chs-topbar");
+    const row = top.createDiv("chs-book-row");
+    const back = row.createEl("button", { text: "\u2190 \u8FD4\u56DE\u62C6\u4E66\u9879\u76EE", cls: "chs-btn" });
+    back.addEventListener("click", () => void this.returnToMatrix());
+    row.createSpan("chs-char-title").setText("\u4EBA\u8BBE\u62C6\u89E3 \xB7 " + book.bookInfo.title);
+    const toolbar = contentEl.createDiv("chs-toolbar");
+    const left = toolbar.createDiv("chs-toolbar-left");
+    const addChar = left.createEl("button", { text: "\uFF0B \u6DFB\u52A0\u89D2\u8272", cls: "chs-btn chs-btn-primary" });
+    addChar.addEventListener("click", () => this.addCharacter());
+    const addDim = left.createEl("button", { text: "\uFF0B \u6DFB\u52A0\u4EBA\u8BBE\u7EF4\u5EA6", cls: "chs-btn" });
+    addDim.addEventListener("click", () => this.addCharacterDimension());
+    const stats = toolbar.createDiv("chs-stats");
+    stats.setText(
+      (book.characters.length || 0) + " \u4E2A\u89D2\u8272 \xB7 " + (book.characterDimensions.length || 0) + " \u4E2A\u4EBA\u8BBE\u7EF4\u5EA6"
+    );
+    this.buildMatrix(book);
+  }
+  buildMatrix(book) {
+    const scroll = this.contentEl.createDiv("chs-matrix-scroll");
+    const table = scroll.createEl("table");
+    table.addClass("chs-matrix", "chs-character-matrix");
+    scroll.addEventListener("contextmenu", (e) => this.onContextMenu(e));
+    const colgroup = table.createEl("colgroup");
+    const nodeCol = colgroup.createEl("col");
+    nodeCol.style.width = "var(--chs-node-w, 200px)";
+    for (const _d of book.characterDimensions) {
+      const c = colgroup.createEl("col");
+      c.style.width = "var(--chs-col-w, 150px)";
+    }
+    const fillerCol = colgroup.createEl("col");
+    fillerCol.style.width = "var(--chs-col-w, 150px)";
+    const thead = table.createEl("thead");
+    const headRow = thead.createEl("tr");
+    const corner = headRow.createEl("th", { cls: "chs-corner" });
+    corner.createSpan("chs-corner-label").setText("\u89D2\u8272");
+    for (const dim of book.characterDimensions) {
+      const th = headRow.createEl("th", { cls: "chs-dim-head" });
+      th.dataset.charDimId = dim.id;
+      th.style.setProperty("--chs-color", dim.color);
+      const cap = th.createDiv("chs-capsule");
+      cap.createSpan("chs-capsule-dot").style.backgroundColor = dim.color;
+      cap.createSpan("chs-capsule-name").setText(dim.name);
+    }
+    const addDimTh = headRow.createEl("th", { cls: "chs-add-dim-head" });
+    const addDimBtn = addDimTh.createEl("button", {
+      text: "\uFF0B \u7EF4\u5EA6",
+      cls: "chs-btn chs-btn-primary chs-btn-sm"
+    });
+    addDimBtn.addEventListener("click", () => this.addCharacterDimension());
+    const tbody = table.createEl("tbody");
+    for (const character of book.characters) {
+      const tr = tbody.createEl("tr");
+      const nodeTd = tr.createEl("td", { cls: "chs-node" });
+      nodeTd.dataset.charId = character.id;
+      const icon = nodeTd.createSpan("chs-node-icon");
+      (0, import_obsidian4.setIcon)(icon, "user");
+      nodeTd.createSpan("chs-node-name").setText(character.name);
+      for (const dim of book.characterDimensions) {
+        const td = tr.createEl("td", { cls: "chs-cell chs-character-cell" });
+        td.style.setProperty("--chs-color", dim.color);
+        td.dataset.charCell = character.id;
+        td.dataset.charDim = dim.id;
+        this.renderCharacterCell(td, character, dim);
+      }
+      tr.createEl("td", { cls: "chs-cell-filler" });
+    }
+    const addTr = tbody.createEl("tr", { cls: "chs-add-row" });
+    const addTd = addTr.createEl("td", { cls: "chs-node chs-add-chapter" });
+    const addBtn = addTd.createEl("button", {
+      text: "\uFF0B \u6DFB\u52A0\u89D2\u8272",
+      cls: "chs-btn chs-btn-ghost chs-btn-sm"
+    });
+    addBtn.addEventListener("click", () => this.addCharacter());
+    for (let i = 0; i < book.characterDimensions.length + 1; i++) {
+      addTr.createEl("td", { cls: "chs-cell-filler" });
+    }
+    this.setupObserver(scroll);
+    table.addEventListener("click", (e) => this.onClick(e));
+  }
+  setupObserver(scroll) {
+    var _a;
+    (_a = this.observer) == null ? void 0 : _a.disconnect();
+    this.observer = new IntersectionObserver(
+      (entries) => {
+        var _a2;
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const el = entry.target;
+            (_a2 = this.observer) == null ? void 0 : _a2.unobserve(el);
+            void this.loadCharacterCell(el);
+          }
+        }
+      },
+      { root: scroll, rootMargin: "120px" }
+    );
+  }
+  renderCharacterCell(td, character, dim) {
+    var _a;
+    const book = this.book;
+    if (!book) return;
+    const cell = book.characterCells[cellKey(character.id, dim.id)];
+    const fileExists = !!(cell == null ? void 0 : cell.filePath) && this.app.vault.getAbstractFileByPath(cell.filePath) instanceof import_obsidian4.TFile;
+    td.empty();
+    td.removeClass("is-filled", "is-empty");
+    if (fileExists) {
+      td.addClass("is-filled");
+      td.createDiv("chs-cell-body").setText("\u2026");
+      (_a = this.observer) == null ? void 0 : _a.observe(td);
+    } else {
+      td.addClass("is-empty");
+      const plus = td.createDiv("chs-cell-plus");
+      (0, import_obsidian4.setIcon)(plus, "plus");
+    }
+  }
+  async loadCharacterCell(td) {
+    const book = this.book;
+    if (!book) return;
+    const charId = td.dataset.charCell;
+    const dimId = td.dataset.charDim;
+    if (!charId || !dimId) return;
+    const cell = book.characterCells[cellKey(charId, dimId)];
+    if (!(cell == null ? void 0 : cell.filePath)) return;
+    const file = this.app.vault.getAbstractFileByPath(cell.filePath);
+    if (!(file instanceof import_obsidian4.TFile)) {
+      cell.filePath = "";
+      cell.hasContent = false;
+      void this.plugin.saveSettings();
+      td.removeClass("is-filled");
+      td.addClass("is-empty");
+      td.empty();
+      const plus = td.createDiv("chs-cell-plus");
+      (0, import_obsidian4.setIcon)(plus, "plus");
+      return;
+    }
+    let content = "";
+    try {
+      content = await this.app.vault.cachedRead(file);
+    } catch (e) {
+    }
+    const body = content.replace(/^---[\s\S]*?---\s*/, "").replace(/<!-- chs-return -->[\s\S]*$/, "").trim();
+    td.empty();
+    if (!body) {
+      td.removeClass("is-filled");
+      td.addClass("is-empty");
+      const plus = td.createDiv("chs-cell-plus");
+      (0, import_obsidian4.setIcon)(plus, "plus");
+      td.createSpan("chs-cell-hint").setText("\u5DF2\u521B\u5EFA");
+      return;
+    }
+    td.addClass("is-filled");
+    td.createDiv("chs-cell-body").setText(body.length > MAX_PREVIEW2 ? body.slice(0, MAX_PREVIEW2) + "\u2026" : body);
+  }
+  onClick(e) {
+    const t = e.target;
+    const cellEl = t.closest("[data-char-cell]");
+    if (cellEl) {
+      void this.openCharacterNote(cellEl.dataset.charCell, cellEl.dataset.charDim);
+      return;
+    }
+    const dimEl = t.closest("[data-char-dim-id]");
+    if (dimEl) {
+      this.editCharacterDimension(dimEl.dataset.charDimId);
+    }
+  }
+  onContextMenu(e) {
+    const t = e.target;
+    const nodeEl = t.closest("[data-char-id]");
+    if (nodeEl) {
+      e.preventDefault();
+      this.buildCharacterMenu(nodeEl.dataset.charId).showAtMouseEvent(e);
+    }
+  }
+  buildCharacterMenu(charId) {
+    const menu = new import_obsidian4.Menu();
+    menu.addItem(
+      (i) => i.setTitle("\u91CD\u547D\u540D").setIcon("pencil").onClick(() => this.renameCharacter(charId))
+    );
+    menu.addItem(
+      (i) => i.setTitle("\u5220\u9664\u89D2\u8272").setIcon("trash").onClick(() => this.deleteCharacter(charId))
+    );
+    return menu;
+  }
+  async openCharacterNote(charId, dimId) {
+    var _a;
+    const book = this.book;
+    if (!book) return;
+    const dim = book.characterDimensions.find((d) => d.id === dimId);
+    const character = book.characters.find((c) => c.id === charId);
+    if (!dim || !character) return;
+    const key = cellKey(charId, dimId);
+    const cell = (_a = book.characterCells[key]) != null ? _a : book.characterCells[key] = { filePath: "", hasContent: false };
+    let file = cell.filePath ? this.app.vault.getAbstractFileByPath(cell.filePath) : null;
+    if (!(file instanceof import_obsidian4.TFile)) {
+      file = await createCharacterNote(this.app.vault, book, charId, dim, "");
+      cell.filePath = file.path;
+      cell.hasContent = false;
+      await this.plugin.saveSettings();
+      this.render();
+    }
+    await this.openInEditor(file.path);
+  }
+  async openInEditor(filePath) {
+    const file = this.app.vault.getAbstractFileByPath(filePath);
+    if (!(file instanceof import_obsidian4.TFile)) {
+      new import_obsidian4.Notice("\u7B14\u8BB0\u4E0D\u5B58\u5728\uFF1A" + filePath);
+      return;
+    }
+    const workspace = this.app.workspace;
+    let leaf = workspace.getLeaf(false);
+    if (leaf === this.leaf) {
+      leaf = import_obsidian4.Platform.isMobile ? workspace.getLeaf("tab") : workspace.getLeaf("split");
+    }
+    await leaf.openFile(file);
+    workspace.setActiveLeaf(leaf, { focus: true });
+  }
+  async returnToMatrix() {
+    var _a;
+    const workspace = this.app.workspace;
+    const matrixLeaf = (_a = workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX)[0]) != null ? _a : null;
+    this.leaf.detach();
+    if (matrixLeaf) {
+      await workspace.revealLeaf(matrixLeaf);
+      workspace.setActiveLeaf(matrixLeaf, { focus: true });
+    } else {
+      const leaf = workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
+      workspace.setActiveLeaf(leaf, { focus: true });
+    }
+  }
+  addCharacter() {
+    const book = this.book;
+    if (!book) return;
+    new PromptModal(this.app, {
+      title: "\u6DFB\u52A0\u89D2\u8272",
+      placeholder: "\u89D2\u8272\u59D3\u540D",
+      confirmText: "\u6DFB\u52A0",
+      onConfirm: (name) => {
+        const n = sanitizeFileName(name) || "\u89D2\u8272";
+        book.characters.push({ id: uid("p"), name: n });
+        void this.plugin.saveSettings();
+        this.render();
+      }
+    }).open();
+  }
+  renameCharacter(charId) {
+    const book = this.book;
+    if (!book) return;
+    const character = book.characters.find((c) => c.id === charId);
+    if (!character) return;
+    new PromptModal(this.app, {
+      title: "\u91CD\u547D\u540D\u89D2\u8272",
+      placeholder: "\u89D2\u8272\u59D3\u540D",
+      initial: character.name,
+      confirmText: "\u4FDD\u5B58",
+      onConfirm: (name) => void this.doSaveCharacterName(character, name)
+    }).open();
+  }
+  async doSaveCharacterName(character, name) {
+    const book = this.book;
+    if (!book) return;
+    const n = sanitizeFileName(name) || character.name;
+    if (n === character.name) return;
+    character.name = n;
+    await this.syncCharacterFiles(character);
+    await this.plugin.saveSettings();
+    this.render();
+  }
+  /** Rename a character's note files to match its new name. */
+  async syncCharacterFiles(character) {
+    const book = this.book;
+    if (!book) return;
+    for (const dim of book.characterDimensions) {
+      const key = cellKey(character.id, dim.id);
+      const cell = book.characterCells[key];
+      if (!(cell == null ? void 0 : cell.filePath)) continue;
+      const newPath = buildCharacterPath(book, character.id, dim.name);
+      if (newPath === cell.filePath) continue;
+      const f = this.app.vault.getAbstractFileByPath(cell.filePath);
+      if (f instanceof import_obsidian4.TFile) {
+        try {
+          await this.app.fileManager.renameFile(f, newPath);
+        } catch (e) {
+        }
+      }
+      cell.filePath = newPath;
+    }
+  }
+  deleteCharacter(charId) {
+    const book = this.book;
+    if (!book) return;
+    const character = book.characters.find((c) => c.id === charId);
+    if (!character) return;
+    new ConfirmModal(this.app, {
+      title: "\u5220\u9664\u89D2\u8272",
+      message: "\u5C06\u4ECE\u4EBA\u8BBE\u77E9\u9635\u4E2D\u5220\u9664\u300C" + character.name + "\u300D\uFF08\u4ED3\u5E93\u4E2D\u7684\u7B14\u8BB0\u6587\u4EF6\u4FDD\u7559\uFF09\u3002",
+      confirmText: "\u5220\u9664",
+      danger: true,
+      onConfirm: async () => {
+        book.characters = book.characters.filter((c) => c.id !== charId);
+        await this.plugin.saveSettings();
+        this.render();
+      }
+    }).open();
+  }
+  addCharacterDimension() {
+    const book = this.book;
+    if (!book) return;
+    new DimensionModal(this.app, {
+      title: "\u6DFB\u52A0\u4EBA\u8BBE\u7EF4\u5EA6",
+      onSave: async (name, color) => {
+        book.characterDimensions.push({
+          id: uid("d"),
+          name: sanitizeFileName(name) || "\u7EF4\u5EA6",
+          color,
+          isChart: false,
+          yAxisLabels: []
+        });
+        await this.plugin.saveSettings();
+        this.render();
+      }
+    }).open();
+  }
+  editCharacterDimension(dimId) {
+    const book = this.book;
+    if (!book) return;
+    const dim = book.characterDimensions.find((d) => d.id === dimId);
+    if (!dim) return;
+    new DimensionModal(this.app, {
+      title: "\u7F16\u8F91\u4EBA\u8BBE\u7EF4\u5EA6",
+      initial: dim,
+      onSave: async (name, color) => {
+        dim.name = sanitizeFileName(name) || dim.name;
+        dim.color = color;
+        await this.plugin.saveSettings();
+        this.render();
+      },
+      onDelete: () => {
+        new ConfirmModal(this.app, {
+          title: "\u5220\u9664\u4EBA\u8BBE\u7EF4\u5EA6",
+          message: "\u5C06\u5220\u9664\u7EF4\u5EA6\u300C" + dim.name + "\u300D\u53CA\u5176\u77E9\u9635\u5217\uFF08\u4ED3\u5E93\u4E2D\u7684\u7B14\u8BB0\u6587\u4EF6\u4FDD\u7559\uFF09\u3002",
+          confirmText: "\u5220\u9664",
+          danger: true,
+          onConfirm: async () => {
+            book.characterDimensions = book.characterDimensions.filter((d) => d.id !== dimId);
+            await this.plugin.saveSettings();
+            this.render();
+          }
+        }).open();
+      }
+    }).open();
+  }
+};
+
+// dashboard-view.ts
+var import_obsidian5 = require("obsidian");
+var ChaiShuDashboardView = class extends import_obsidian5.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+  }
+  getViewType() {
+    return VIEW_TYPE_CHAISHU_DASHBOARD;
+  }
+  getDisplayText() {
+    return "\u9879\u76EE\u5927\u5385";
+  }
+  getIcon() {
+    return "layout-grid";
+  }
+  get settings() {
+    return this.plugin.getSettings();
+  }
+  async onOpen() {
+    this.render();
+  }
+  async onClose() {
+    this.contentEl.empty();
+  }
+  render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-dashboard");
+    const head = contentEl.createDiv("chs-dash-head");
+    const titleWrap = head.createDiv("chs-dash-titlewrap");
+    const icon = titleWrap.createSpan("chs-dash-icon");
+    (0, import_obsidian5.setIcon)(icon, "layout-grid");
+    titleWrap.createSpan("chs-dash-title").setText("ChaiShu \u9879\u76EE\u5927\u5385");
+    const newBtn = head.createEl("button", {
+      text: "\uFF0B \u65B0\u5EFA\u62C6\u4E66\u9879\u76EE",
+      cls: "chs-btn chs-btn-primary"
+    });
+    newBtn.addEventListener("click", () => this.openCreateBook());
+    const controls = contentEl.createDiv("chs-dash-controls");
+    this.searchInput = controls.createEl("input", { type: "text" });
+    this.searchInput.addClass("chs-input", "chs-dash-search");
+    this.searchInput.setAttribute("placeholder", "\u{1F50D} \u641C\u7D22\u62C6\u4E66\u540D\u79F0\u2026");
+    this.searchInput.addEventListener("input", () => this.renderList());
+    this.categorySelect = controls.createEl("select");
+    this.categorySelect.addClass("chs-select", "chs-dash-filter");
+    this.tagSelect = controls.createEl("select");
+    this.tagSelect.addClass("chs-select", "chs-dash-filter");
+    this.categorySelect.addEventListener("change", () => this.renderList());
+    this.tagSelect.addEventListener("change", () => this.renderList());
+    this.listEl = contentEl.createDiv("chs-dash-list");
+    this.renderFilters();
+    this.renderList();
+  }
+  allBooks() {
+    var _a;
+    return (_a = this.settings.books) != null ? _a : [];
+  }
+  renderFilters() {
+    var _a, _b, _c, _d;
+    const catCounts = /* @__PURE__ */ new Map();
+    const tagCounts = /* @__PURE__ */ new Map();
+    for (const b of this.allBooks()) {
+      for (const c of (_a = b.bookInfo.category) != null ? _a : []) catCounts.set(c, ((_b = catCounts.get(c)) != null ? _b : 0) + 1);
+      for (const t of (_c = b.bookInfo.tags) != null ? _c : []) tagCounts.set(t, ((_d = tagCounts.get(t)) != null ? _d : 0) + 1);
+    }
+    const prevCat = this.categorySelect.value;
+    const prevTag = this.tagSelect.value;
+    this.categorySelect.empty();
+    const catAll = this.categorySelect.createEl("option");
+    catAll.value = "";
+    catAll.textContent = "\u5168\u90E8\u5206\u7C7B (" + this.allBooks().length + ")";
+    for (const [c, n] of [...catCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const opt = this.categorySelect.createEl("option");
+      opt.value = c;
+      opt.textContent = c + " (" + n + ")";
+    }
+    this.categorySelect.value = prevCat;
+    this.tagSelect.empty();
+    const tagAll = this.tagSelect.createEl("option");
+    tagAll.value = "";
+    tagAll.textContent = "\u5168\u90E8\u6807\u7B7E (" + this.allBooks().length + ")";
+    for (const [t, n] of [...tagCounts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const opt = this.tagSelect.createEl("option");
+      opt.value = t;
+      opt.textContent = t + " (" + n + ")";
+    }
+    this.tagSelect.value = prevTag;
+  }
+  renderList() {
+    var _a, _b;
+    this.renderFilters();
+    const query = this.searchInput.value.trim().toLowerCase();
+    const tokens = query.split(/\s+/).filter(Boolean);
+    const cat = this.categorySelect.value;
+    const tag = this.tagSelect.value;
+    const books = this.allBooks().filter((b) => {
+      var _a2, _b2, _c;
+      if (tokens.length > 0) {
+        const hay = (b.bookInfo.title + " " + ((_a2 = b.bookInfo.author) != null ? _a2 : "")).toLowerCase();
+        if (!tokens.every((t) => hay.includes(t))) return false;
+      }
+      if (cat && !((_b2 = b.bookInfo.category) != null ? _b2 : []).includes(cat)) return false;
+      if (tag && !((_c = b.bookInfo.tags) != null ? _c : []).includes(tag)) return false;
+      return true;
+    });
+    this.listEl.empty();
+    if (books.length === 0) {
+      const empty = this.listEl.createDiv("chs-dash-empty");
+      empty.setText(this.allBooks().length === 0 ? "\u8FD8\u6CA1\u6709\u62C6\u4E66\u9879\u76EE" : "\u6CA1\u6709\u5339\u914D\u7684\u9879\u76EE");
+      if (this.allBooks().length === 0) {
+        const btn = empty.createEl("button", {
+          text: "\uFF0B \u65B0\u5EFA\u62C6\u4E66\u9879\u76EE",
+          cls: "chs-btn chs-btn-primary"
+        });
+        btn.addEventListener("click", () => this.openCreateBook());
+      }
+      return;
+    }
+    for (const b of books) {
+      const card = this.listEl.createDiv("chs-dash-card");
+      card.dataset.bookId = b.id;
+      const meta = card.createDiv("chs-dash-card-meta");
+      meta.createDiv("chs-dash-card-title").setText(b.bookInfo.title || "\u672A\u547D\u540D\u62C6\u4E66");
+      if (b.bookInfo.author) {
+        meta.createDiv("chs-dash-card-author").setText("\u4F5C\u8005\uFF1A" + b.bookInfo.author);
+      }
+      if (((_a = b.bookInfo.category) != null ? _a : []).length > 0) {
+        const catRow = meta.createDiv("chs-dash-card-tags");
+        for (const c of b.bookInfo.category) catRow.createSpan("chs-chip").setText(c);
+      }
+      if (((_b = b.bookInfo.tags) != null ? _b : []).length > 0) {
+        const tagRow = meta.createDiv("chs-dash-card-tags");
+        for (const t of b.bookInfo.tags) {
+          const chip = tagRow.createSpan("chs-chip chs-chip-tag");
+          chip.setText("# " + t);
+        }
+      }
+      const openBtn = card.createEl("button", {
+        text: "\u6253\u5F00\u77E9\u9635",
+        cls: "chs-btn chs-btn-primary chs-btn-sm"
+      });
+      openBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        void this.plugin.openMatrix(b.id);
+      });
+      card.addEventListener("click", () => void this.plugin.openMatrix(b.id));
+    }
+  }
+  openCreateBook() {
+    new BookCreateModal(this.app, async (title, author) => {
+      await this.plugin.createBook(title, author);
+      await this.plugin.openMatrix();
+    }).open();
+  }
+};
+
+// settings.ts
+var import_obsidian6 = require("obsidian");
+var ChaiShuSettingTab = class extends import_obsidian6.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -2861,41 +3391,41 @@ var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "ChaiShu Matrix Pro \u8BBE\u7F6E" });
-    new import_obsidian4.Setting(containerEl).setName("\u9ED8\u8BA4\u7AE0\u8282\u6570").setDesc("\u65B0\u5EFA\u62C6\u4E66\u65F6\u81EA\u52A8\u751F\u6210\u7684\u7AE0\u8282\u6570\u91CF\uFF081\u2013500\uFF09").addText((t) => {
+    new import_obsidian6.Setting(containerEl).setName("\u9ED8\u8BA4\u7AE0\u8282\u6570").setDesc("\u65B0\u5EFA\u62C6\u4E66\u65F6\u81EA\u52A8\u751F\u6210\u7684\u7AE0\u8282\u6570\u91CF\uFF081\u2013500\uFF09").addText((t) => {
       t.setValue(String(this.plugin.settings.defaultChapterCount)).onChange((v) => {
         const n = parseInt(v, 10);
         this.plugin.settings.defaultChapterCount = Number.isFinite(n) && n > 0 ? Math.min(500, n) : 5;
         void this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("\u9ED8\u8BA4\u5206\u6790\u7EF4\u5EA6").setDesc("\u65B0\u5EFA\u62C6\u4E66\u65F6\u81EA\u52A8\u521B\u5EFA\u7684\u7EF4\u5EA6\uFF0C\u7528\u9017\u53F7\u5206\u9694\uFF08\u540D\u4E3A\u300C\u60C5\u7EEA\u300D\u7684\u7EF4\u5EA6\u81EA\u52A8\u5F00\u542F\u6298\u7EBF\u753B\u677F\uFF09").addText((t) => {
+    new import_obsidian6.Setting(containerEl).setName("\u9ED8\u8BA4\u5206\u6790\u7EF4\u5EA6").setDesc("\u65B0\u5EFA\u62C6\u4E66\u65F6\u81EA\u52A8\u521B\u5EFA\u7684\u7EF4\u5EA6\uFF0C\u7528\u9017\u53F7\u5206\u9694\uFF08\u540D\u4E3A\u300C\u60C5\u7EEA\u300D\u7684\u7EF4\u5EA6\u81EA\u52A8\u5F00\u542F\u6298\u7EBF\u753B\u677F\uFF09").addText((t) => {
       t.setValue(this.plugin.settings.defaultDimensionNames).onChange((v) => {
         this.plugin.settings.defaultDimensionNames = v;
         void this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("\u9ED8\u8BA4\u62C6\u4E66\u5B58\u653E\u4F4D\u7F6E").setDesc("\u65B0\u5EFA\u62C6\u4E66\u65F6\u7684\u9ED8\u8BA4\u5F52\u6863\u6587\u4EF6\u5939\uFF08\u7559\u7A7A = \u5E93\u6839\u76EE\u5F55\uFF09").addText((t) => {
+    new import_obsidian6.Setting(containerEl).setName("\u9ED8\u8BA4\u62C6\u4E66\u5B58\u653E\u4F4D\u7F6E").setDesc("\u65B0\u5EFA\u62C6\u4E66\u65F6\u7684\u9ED8\u8BA4\u5F52\u6863\u6587\u4EF6\u5939\uFF08\u7559\u7A7A = \u5E93\u6839\u76EE\u5F55\uFF09").addText((t) => {
       t.setValue(this.plugin.settings.defaultStoragePath).onChange((v) => {
-        this.plugin.settings.defaultStoragePath = (0, import_obsidian4.normalizePath)(v);
+        this.plugin.settings.defaultStoragePath = (0, import_obsidian6.normalizePath)(v);
         void this.plugin.saveSettings();
       });
     });
     containerEl.createEl("h3", { text: "\u77E9\u9635\u663E\u793A" });
-    new import_obsidian4.Setting(containerEl).setName("\u77E9\u9635\u5355\u5143\u683C\u9ED8\u8BA4\u5BBD\u5EA6").setDesc("\u77E9\u9635\u5355\u5143\u683C\u7684\u9ED8\u8BA4\u5BBD\u5EA6\uFF08100\u2013300px\uFF09\uFF0C\u8C03\u6574\u540E\u7ACB\u5373\u751F\u6548").addSlider((s) => {
+    new import_obsidian6.Setting(containerEl).setName("\u77E9\u9635\u5355\u5143\u683C\u9ED8\u8BA4\u5BBD\u5EA6").setDesc("\u77E9\u9635\u5355\u5143\u683C\u7684\u9ED8\u8BA4\u5BBD\u5EA6\uFF08100\u2013300px\uFF09\uFF0C\u8C03\u6574\u540E\u7ACB\u5373\u751F\u6548").addSlider((s) => {
       s.setLimits(100, 300, 10).setValue(this.plugin.settings.cellWidth || 150).setDynamicTooltip().onChange((v) => {
         this.plugin.settings.cellWidth = v;
         void this.plugin.saveSettings();
         this.plugin.notifyViews();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("\u77E9\u9635\u5355\u5143\u683C\u9ED8\u8BA4\u9AD8\u5EA6").setDesc("\u77E9\u9635\u5355\u5143\u683C\u7684\u9ED8\u8BA4\u6700\u5C0F\u9AD8\u5EA6\uFF0840\u2013140px\uFF09\uFF0C\u8C03\u6574\u540E\u7ACB\u5373\u751F\u6548").addSlider((s) => {
+    new import_obsidian6.Setting(containerEl).setName("\u77E9\u9635\u5355\u5143\u683C\u9ED8\u8BA4\u9AD8\u5EA6").setDesc("\u77E9\u9635\u5355\u5143\u683C\u7684\u9ED8\u8BA4\u6700\u5C0F\u9AD8\u5EA6\uFF0840\u2013140px\uFF09\uFF0C\u8C03\u6574\u540E\u7ACB\u5373\u751F\u6548").addSlider((s) => {
       s.setLimits(40, 140, 5).setValue(this.plugin.settings.cellHeight || 72).setDynamicTooltip().onChange((v) => {
         this.plugin.settings.cellHeight = v;
         void this.plugin.saveSettings();
         this.plugin.notifyViews();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName("\u77E9\u9635\u7F29\u653E").setDesc("\u91CD\u7F6E\u53CC\u6307\u634F\u5408\u7F29\u653E\u4E3A 100%").addButton((b) => {
+    new import_obsidian6.Setting(containerEl).setName("\u77E9\u9635\u7F29\u653E").setDesc("\u91CD\u7F6E\u53CC\u6307\u634F\u5408\u7F29\u653E\u4E3A 100%").addButton((b) => {
       b.setButtonText("\u91CD\u7F6E\u7F29\u653E").onClick(async () => {
         this.plugin.settings.matrixZoom = 1;
         await this.plugin.saveSettings();
@@ -2904,7 +3434,7 @@ var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
     });
     this.renderDimensionManagement(containerEl);
     containerEl.createEl("h3", { text: "\u5371\u9669\u64CD\u4F5C" });
-    new import_obsidian4.Setting(containerEl).setName("\u91CD\u7F6E\u6240\u6709\u6570\u636E").setDesc("\u6E05\u7A7A\u6240\u6709\u62C6\u4E66\u9879\u76EE\u7684\u77E9\u9635\u914D\u7F6E\uFF08\u4E0D\u4F1A\u5220\u9664\u4ED3\u5E93\u4E2D\u7684\u7B14\u8BB0\u6587\u4EF6\uFF09").addButton((b) => {
+    new import_obsidian6.Setting(containerEl).setName("\u91CD\u7F6E\u6240\u6709\u6570\u636E").setDesc("\u6E05\u7A7A\u6240\u6709\u62C6\u4E66\u9879\u76EE\u7684\u77E9\u9635\u914D\u7F6E\uFF08\u4E0D\u4F1A\u5220\u9664\u4ED3\u5E93\u4E2D\u7684\u7B14\u8BB0\u6587\u4EF6\uFF09").addButton((b) => {
       b.setButtonText("\u91CD\u7F6E").setWarning().onClick(() => {
         new ConfirmModal(this.app, {
           title: "\u91CD\u7F6E\u6240\u6709\u6570\u636E",
@@ -2931,7 +3461,7 @@ var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
       return;
     }
     let bookId = books[0].id;
-    new import_obsidian4.Setting(containerEl).setName("\u9009\u62E9\u62C6\u4E66").addDropdown((d) => {
+    new import_obsidian6.Setting(containerEl).setName("\u9009\u62E9\u62C6\u4E66").addDropdown((d) => {
       for (const b of books) d.addOption(b.id, b.bookInfo.title || b.id);
       d.setValue(bookId);
       d.onChange((v) => {
@@ -2949,7 +3479,7 @@ var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
     }
   }
   renderDimensionRow(containerEl, book, dim) {
-    new import_obsidian4.Setting(containerEl).setName("\u7EF4\u5EA6\u6807\u7B7E").setDesc("\u4FEE\u6539\u540E\uFF0C\u8868\u5934\u4E0E\u5DF2\u6709\u7B14\u8BB0\u7684\u300C\u7EF4\u5EA6\u300D\u5C5E\u6027\u81EA\u52A8\u540C\u6B65").addText((t) => {
+    new import_obsidian6.Setting(containerEl).setName("\u7EF4\u5EA6\u6807\u7B7E").setDesc("\u4FEE\u6539\u540E\uFF0C\u8868\u5934\u4E0E\u5DF2\u6709\u7B14\u8BB0\u7684\u300C\u7EF4\u5EA6\u300D\u5C5E\u6027\u81EA\u52A8\u540C\u6B65").addText((t) => {
       t.setValue(dim.name);
       t.inputEl.addEventListener("blur", () => {
         const name = sanitizeFileName(t.getValue());
@@ -2967,7 +3497,7 @@ var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
         this.plugin.notifyViews();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName(dim.name + " \xB7 \u60C5\u7EEA\u6298\u7EBF").setDesc("\u5F00\u542F\u540E\u8BE5\u7EF4\u5EA6\u62E5\u6709\u4E13\u5C5E\u6298\u7EBF\u7ED8\u5236").addToggle((t) => {
+    new import_obsidian6.Setting(containerEl).setName(dim.name + " \xB7 \u60C5\u7EEA\u6298\u7EBF").setDesc("\u5F00\u542F\u540E\u8BE5\u7EF4\u5EA6\u62E5\u6709\u4E13\u5C5E\u6298\u7EBF\u7ED8\u5236").addToggle((t) => {
       t.setValue(dim.isChart).onChange((v) => {
         dim.isChart = v;
         void this.plugin.saveSettings();
@@ -2976,7 +3506,7 @@ var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
       });
     });
     if (dim.isChart) {
-      new import_obsidian4.Setting(containerEl).setName("Y\u8F74 5 \u5C42\u7EA7\u540D\u79F0").setDesc("\u4ECE\u4F4E\u5230\u9AD8 5 \u5C42\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u7B2C 3 \u5C42\u4E3A\u57FA\u51C6\u7EBF\uFF09").addText((t) => {
+      new import_obsidian6.Setting(containerEl).setName("Y\u8F74 5 \u5C42\u7EA7\u540D\u79F0").setDesc("\u4ECE\u4F4E\u5230\u9AD8 5 \u5C42\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u7B2C 3 \u5C42\u4E3A\u57FA\u51C6\u7EBF\uFF09").addText((t) => {
         t.setValue(dim.yAxisLabels.join(","));
         t.inputEl.addEventListener("blur", () => {
           dim.yAxisLabels = normalizeYAxisLabels(t.getValue().split(/[,，、\s]+/).filter(Boolean));
@@ -2992,10 +3522,11 @@ var ChaiShuSettingTab = class extends import_obsidian4.PluginSettingTab {
 };
 
 // main.ts
-var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
+var ChaiShuMatrixPlugin = class extends import_obsidian7.Plugin {
   constructor() {
     super(...arguments);
     this.views = /* @__PURE__ */ new Set();
+    this.characterViews = /* @__PURE__ */ new Set();
   }
   async onload() {
     await this.loadSettings();
@@ -3005,23 +3536,33 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
       this.views.add(view);
       return view;
     });
-    this.addRibbonIcon("layout-grid", "\u6253\u5F00\u62C6\u4E66\u77E9\u9635", () => {
-      void this.activateView();
+    this.registerView(VIEW_TYPE_CHAISHU_DASHBOARD, (leaf) => {
+      return new ChaiShuDashboardView(leaf, this);
+    });
+    this.registerView(VIEW_TYPE_CHAISHU_CHARACTER, (leaf) => {
+      const view = new ChaiShuCharacterView(leaf, this);
+      this.characterViews.add(view);
+      return view;
+    });
+    this.addRibbonIcon("layout-grid", "\u6253\u5F00\u9879\u76EE\u5927\u5385", () => {
+      void this.openDashboard();
     });
     this.addCommand({
-      id: "open-matrix",
-      name: "\u6253\u5F00\u62C6\u4E66\u77E9\u9635",
+      id: "open-dashboard",
+      name: "\u6253\u5F00\u9879\u76EE\u5927\u5385",
       callback: () => {
-        void this.activateView();
+        void this.openDashboard();
       }
     });
     this.addCommand({
       id: "new-book",
-      name: "\u65B0\u5EFA\u62C6\u4E66",
+      name: "\u65B0\u5EFA\u62C6\u4E66\u9879\u76EE",
       callback: () => {
-        void this.activateView().then(() => {
-          var _a;
-          return (_a = this.getOpenView()) == null ? void 0 : _a.openCreateBook();
+        void this.openDashboard().then(() => {
+          new BookCreateModal(this.app, async (title, author) => {
+            await this.createBook(title, author);
+            await this.openMatrix();
+          }).open();
         });
       }
     });
@@ -3035,6 +3576,9 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
     this.registerObsidianProtocolHandler("chaishu-matrix-pro", () => {
       void this.returnToMatrix();
     });
+    this.registerObsidianProtocolHandler("chaishu-character", () => {
+      void this.returnToCharacter();
+    });
     this.registerMarkdownPostProcessor((el) => {
       el.querySelectorAll('a[href="obsidian://chaishu-matrix-pro"]').forEach((a) => {
         a.classList.add("chs-return-link");
@@ -3042,6 +3586,14 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           e.preventDefault();
           e.stopPropagation();
           void this.returnToMatrix();
+        });
+      });
+      el.querySelectorAll('a[href="obsidian://chaishu-character"]').forEach((a) => {
+        a.classList.add("chs-return-link");
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void this.returnToCharacter();
         });
       });
     });
@@ -3059,7 +3611,10 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
   }
   onunload() {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAISHU_DASHBOARD);
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAISHU_CHARACTER);
     this.views.clear();
+    this.characterViews.clear();
   }
   getSettings() {
     return this.settings;
@@ -3075,19 +3630,107 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
   }
   notifyViews() {
     for (const v of this.views) v.refresh();
+    for (const v of this.characterViews) v.render();
   }
-  async activateView() {
+  /** Open (or focus) the standalone 项目大厅 tab. */
+  async openDashboard() {
     var _a;
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_DASHBOARD);
+    let leaf = (_a = leaves[0]) != null ? _a : null;
+    if (!leaf) {
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_DASHBOARD, active: true });
+    }
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+  /** Open (or focus) the matrix view for a book (defaults to the active book). */
+  async openMatrix(bookId) {
+    var _a;
+    if (bookId) {
+      this.settings.activeBookId = bookId;
+      await this.saveSettings();
+    }
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);
     let leaf = (_a = leaves[0]) != null ? _a : null;
+    const existed = !!leaf;
     if (!leaf) {
       leaf = this.app.workspace.getLeaf("tab");
       await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
     }
-    if (leaf) {
-      await this.app.workspace.revealLeaf(leaf);
-      this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    if (existed && leaf.view instanceof ChaiShuMatrixView) {
+      leaf.view.activeBookId = this.settings.activeBookId;
+      leaf.view.refresh();
     }
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+  /** Open (or focus) the 人设拆解 sub-matrix for a book. */
+  async openCharacterView(bookId) {
+    var _a;
+    this.settings.activeBookId = bookId;
+    await this.saveSettings();
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_CHARACTER);
+    let leaf = (_a = leaves[0]) != null ? _a : null;
+    const existed = !!leaf;
+    if (!leaf) {
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_CHARACTER, active: true });
+    }
+    if (existed && leaf.view instanceof ChaiShuCharacterView) {
+      leaf.view.setBook(bookId);
+    }
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+  /** Create a new book (with default chapters + dimensions) and persist it. */
+  async createBook(title, author) {
+    const settings = this.settings;
+    const dims = settings.defaultDimensionNames.split(/[,，、\s]+/).filter(Boolean);
+    const dimensions = dims.map((name, i) => ({
+      id: uid("d"),
+      name: sanitizeFileName(name),
+      color: DIMENSION_COLORS[i % DIMENSION_COLORS.length],
+      isChart: name === "\u60C5\u7EEA",
+      yAxisLabels: [...DEFAULT_Y_AXIS_LABELS]
+    }));
+    const count = Math.max(1, Math.min(500, settings.defaultChapterCount || 5));
+    const structure = [];
+    for (let i = 1; i <= count; i++) {
+      structure.push(createNode("chapter", "\u7B2C" + i + "\u7AE0"));
+    }
+    const book = {
+      id: uid("book"),
+      bookInfo: {
+        title,
+        author,
+        score: "",
+        category: [],
+        tags: [],
+        bgImage: "",
+        bgMode: "cover",
+        bgOverlay: 0.3
+      },
+      storagePath: settings.defaultStoragePath || "",
+      dimensions: dimensions.length ? dimensions : [
+        {
+          id: uid("d"),
+          name: "\u60C5\u7EEA",
+          color: DIMENSION_COLORS[0],
+          isChart: true,
+          yAxisLabels: [...DEFAULT_Y_AXIS_LABELS]
+        }
+      ],
+      structure,
+      cells: {},
+      characters: [],
+      characterDimensions: [],
+      characterCells: {}
+    };
+    settings.books.push(book);
+    settings.activeBookId = book.id;
+    await this.saveSettings();
+    return book;
   }
   /**
    * Return from an opened note: close the note leaf, then focus/reveal the
@@ -3098,7 +3741,7 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
     const workspace = this.app.workspace;
     const matrixLeaf = (_a = workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX)[0]) != null ? _a : null;
     const activeLeaf = workspace.activeLeaf;
-    if (activeLeaf && activeLeaf !== matrixLeaf && ((_b = activeLeaf.view) == null ? void 0 : _b.getViewType()) !== VIEW_TYPE_CHAISHU_MATRIX) {
+    if (activeLeaf && activeLeaf !== matrixLeaf && !this.isPluginView((_b = activeLeaf.view) == null ? void 0 : _b.getViewType())) {
       activeLeaf.detach();
     }
     if (matrixLeaf) {
@@ -3109,6 +3752,27 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
       await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
       workspace.setActiveLeaf(leaf, { focus: true });
     }
+  }
+  /** Return from a character note: close the note leaf, then reveal the 人设拆解 view. */
+  async returnToCharacter() {
+    var _a, _b;
+    const workspace = this.app.workspace;
+    const charLeaf = (_a = workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_CHARACTER)[0]) != null ? _a : null;
+    const activeLeaf = workspace.activeLeaf;
+    if (activeLeaf && activeLeaf !== charLeaf && !this.isPluginView((_b = activeLeaf.view) == null ? void 0 : _b.getViewType())) {
+      activeLeaf.detach();
+    }
+    if (charLeaf) {
+      await workspace.revealLeaf(charLeaf);
+      workspace.setActiveLeaf(charLeaf, { focus: true });
+    } else {
+      const leaf = workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_CHARACTER, active: true });
+      workspace.setActiveLeaf(leaf, { focus: true });
+    }
+  }
+  isPluginView(viewType) {
+    return viewType === VIEW_TYPE_CHAISHU_MATRIX || viewType === VIEW_TYPE_CHAISHU_DASHBOARD || viewType === VIEW_TYPE_CHAISHU_CHARACTER;
   }
   getOpenView() {
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);
@@ -3128,7 +3792,7 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
       const cell = book.cells[cellKey(ch.id, dimId)];
       if (!(cell == null ? void 0 : cell.filePath)) continue;
       const f = this.app.vault.getAbstractFileByPath(cell.filePath);
-      if (f instanceof import_obsidian5.TFile) {
+      if (f instanceof import_obsidian7.TFile) {
         try {
           const body = stripFrontmatter(await this.app.vault.cachedRead(f));
           const content = buildChapterContent(book, ch.id, dim, body);
@@ -3142,14 +3806,16 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
   }
   // ---------------------------------------------------------- normalization
   normalizeBook(b) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
     const bookInfo = {
       title: (_b = (_a = b.bookInfo) == null ? void 0 : _a.title) != null ? _b : "\u672A\u547D\u540D\u62C6\u4E66",
       author: (_d = (_c = b.bookInfo) == null ? void 0 : _c.author) != null ? _d : "",
       score: (_f = (_e = b.bookInfo) == null ? void 0 : _e.score) != null ? _f : "",
-      bgImage: (_h = (_g = b.bookInfo) == null ? void 0 : _g.bgImage) != null ? _h : "",
-      bgMode: ((_i = b.bookInfo) == null ? void 0 : _i.bgMode) === "repeat" ? "repeat" : "cover",
-      bgOverlay: typeof ((_j = b.bookInfo) == null ? void 0 : _j.bgOverlay) === "number" ? b.bookInfo.bgOverlay : 0.3
+      category: Array.isArray((_g = b.bookInfo) == null ? void 0 : _g.category) ? b.bookInfo.category.map((c) => String(c)).filter(Boolean) : [],
+      tags: Array.isArray((_h = b.bookInfo) == null ? void 0 : _h.tags) ? b.bookInfo.tags.map((t) => String(t)).filter(Boolean) : [],
+      bgImage: (_j = (_i = b.bookInfo) == null ? void 0 : _i.bgImage) != null ? _j : "",
+      bgMode: ((_k = b.bookInfo) == null ? void 0 : _k.bgMode) === "repeat" ? "repeat" : "cover",
+      bgOverlay: typeof ((_l = b.bookInfo) == null ? void 0 : _l.bgOverlay) === "number" ? b.bookInfo.bgOverlay : 0.3
     };
     const dimensions = Array.isArray(b.dimensions) ? b.dimensions.map((d) => {
       var _a2, _b2, _c2;
@@ -3174,7 +3840,7 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           if (!(p == null ? void 0 : p.chapterId)) continue;
           const value = typeof p.value === "number" ? p.value : 0;
           const y = Math.max(1, Math.min(5, Math.round(value / 2.5) + 1));
-          ((_l = legacyEmotions[_k = p.chapterId]) != null ? _l : legacyEmotions[_k] = []).push({ x: 50, y });
+          ((_n = legacyEmotions[_m = p.chapterId]) != null ? _n : legacyEmotions[_m] = []).push({ x: 50, y });
         }
       }
     }
@@ -3202,7 +3868,7 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
         if (!nodeId) continue;
         const cc = c;
         cells[cellKey(nodeId, dimId)] = {
-          filePath: (_m = cc == null ? void 0 : cc.filePath) != null ? _m : "",
+          filePath: (_o = cc == null ? void 0 : cc.filePath) != null ? _o : "",
           hasContent: !!(cc == null ? void 0 : cc.hasContent)
         };
       }
@@ -3217,13 +3883,34 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
         ch.emotionData = sorted.map((p) => Math.max(1, Math.min(5, Math.round(p.y) || 3)));
       }
     }
+    const characters = Array.isArray(b.characters) ? b.characters.map((c) => {
+      var _a2, _b2;
+      return {
+        id: (_a2 = c == null ? void 0 : c.id) != null ? _a2 : uid("p"),
+        name: sanitizeFileName((_b2 = c == null ? void 0 : c.name) != null ? _b2 : "\u89D2\u8272")
+      };
+    }) : [];
+    const characterDimensions = Array.isArray(b.characterDimensions) ? b.characterDimensions.map((d) => {
+      var _a2, _b2, _c2;
+      return {
+        id: (_a2 = d.id) != null ? _a2 : uid("d"),
+        name: (_b2 = d.name) != null ? _b2 : "\u7EF4\u5EA6",
+        color: (_c2 = d.color) != null ? _c2 : DIMENSION_COLORS[0],
+        isChart: false,
+        yAxisLabels: []
+      };
+    }) : [];
+    const characterCells = b.characterCells && typeof b.characterCells === "object" ? b.characterCells : {};
     return {
-      id: (_n = b.id) != null ? _n : uid("book"),
+      id: (_p = b.id) != null ? _p : uid("book"),
       bookInfo,
       storagePath,
       dimensions,
       structure,
-      cells
+      cells,
+      characters,
+      characterDimensions,
+      characterCells
     };
   }
   normalizeNode(n) {
@@ -3238,7 +3925,6 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
       summaryFiles: n.summaryFiles && typeof n.summaryFiles === "object" ? n.summaryFiles : {},
       children: Array.isArray(n.children) ? n.children.map((c) => this.normalizeNode(c)) : [],
       collapsed: !!n.collapsed,
-      hideContent: !!n.hideContent,
       emotionData: Array.isArray(n.emotionData) ? n.emotionData.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : []
     };
   }
@@ -3255,8 +3941,8 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
   }
   // -------------------------------------------------------- reverse sync
   async onVaultRename(file, oldPath) {
-    var _a;
-    if (!(file instanceof import_obsidian5.TFile)) return;
+    var _a, _b;
+    if (!(file instanceof import_obsidian7.TFile)) return;
     let changed = false;
     for (const book of this.settings.books) {
       for (const key of Object.keys(book.cells)) {
@@ -3266,9 +3952,16 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           changed = true;
         }
       }
+      for (const key of Object.keys((_a = book.characterCells) != null ? _a : {})) {
+        const cell = book.characterCells[key];
+        if (cell.filePath === oldPath) {
+          cell.filePath = file.path;
+          changed = true;
+        }
+      }
       for (const node of this.allNodes(book)) {
         if (node.type === "chapter") continue;
-        for (const dimId of Object.keys((_a = node.summaryFiles) != null ? _a : {})) {
+        for (const dimId of Object.keys((_b = node.summaryFiles) != null ? _b : {})) {
           if (node.summaryFiles[dimId] === oldPath) {
             node.summaryFiles[dimId] = file.path;
             changed = true;
@@ -3282,8 +3975,8 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
     }
   }
   async onVaultDelete(file) {
-    var _a;
-    if (!(file instanceof import_obsidian5.TFile)) return;
+    var _a, _b;
+    if (!(file instanceof import_obsidian7.TFile)) return;
     let changed = false;
     for (const book of this.settings.books) {
       for (const key of Object.keys(book.cells)) {
@@ -3294,9 +3987,17 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           changed = true;
         }
       }
+      for (const key of Object.keys((_a = book.characterCells) != null ? _a : {})) {
+        const cell = book.characterCells[key];
+        if (cell.filePath === file.path) {
+          cell.filePath = "";
+          cell.hasContent = false;
+          changed = true;
+        }
+      }
       for (const node of this.allNodes(book)) {
         if (node.type === "chapter") continue;
-        for (const dimId of Object.keys((_a = node.summaryFiles) != null ? _a : {})) {
+        for (const dimId of Object.keys((_b = node.summaryFiles) != null ? _b : {})) {
           if (node.summaryFiles[dimId] === file.path) {
             delete node.summaryFiles[dimId];
             changed = true;
@@ -3310,12 +4011,12 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
     }
   }
   // ------------------------------------------------------ note re-linking
-  /** Re-link cell/summary notes whose stored path no longer resolves (e.g. after
+  /** Re-link cell/summary/character notes whose stored path no longer resolves (e.g. after
    *  an upgrade moved or renamed files). Matches notes by their frontmatter. */
   async relinkNotes() {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z;
     const vault = this.app.vault;
-    const resolves = (p) => !!p && vault.getAbstractFileByPath(p) instanceof import_obsidian5.TFile;
+    const resolves = (p) => !!p && vault.getAbstractFileByPath(p) instanceof import_obsidian7.TFile;
     let stale = false;
     outer: for (const book of this.settings.books) {
       for (const ch of collectChapters(book.structure)) {
@@ -3337,6 +4038,12 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           }
         }
       }
+      for (const c of Object.values((_b = book.characterCells) != null ? _b : {})) {
+        if (c.filePath && !resolves(c.filePath)) {
+          stale = true;
+          break outer;
+        }
+      }
     }
     if (!stale) return;
     let changed = false;
@@ -3353,14 +4060,18 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
         if (n.type === "volume") volByName.set(n.name, n);
         else if (n.type === "unit") unitByName.set(n.name, n);
       }
+      const charByName = /* @__PURE__ */ new Map();
+      for (const c of (_c = book.characters) != null ? _c : []) charByName.set(c.name, c);
+      const charDimByName = /* @__PURE__ */ new Map();
+      for (const d of (_d = book.characterDimensions) != null ? _d : []) charDimByName.set(d.name, d);
       for (const file of files) {
         const cache = this.app.metadataCache.getFileCache(file);
         const fm = cache == null ? void 0 : cache.frontmatter;
         if (!fm) continue;
-        const fmChapter = String((_d = (_c = (_b = fm["\u7AE0\u8282\u540D\u79F0"]) != null ? _b : fm["chapter"]) != null ? _c : fm["\u7AE0\u8282"]) != null ? _d : "");
-        const fmDim = String((_g = (_f = (_e = fm["\u5206\u6790\u7EF4\u5EA6"]) != null ? _e : fm["dimension"]) != null ? _f : fm["\u7EF4\u5EA6"]) != null ? _g : "");
+        const fmChapter = String((_g = (_f = (_e = fm["\u7AE0\u8282\u540D\u79F0"]) != null ? _e : fm["chapter"]) != null ? _f : fm["\u7AE0\u8282"]) != null ? _g : "");
+        const fmDim = String((_j = (_i = (_h = fm["\u5206\u6790\u7EF4\u5EA6"]) != null ? _h : fm["dimension"]) != null ? _i : fm["\u7EF4\u5EA6"]) != null ? _j : "");
         if (fmChapter && fmDim) {
-          const fmBook = String((_j = (_i = (_h = fm["\u62C6\u4E66\u9879\u76EE"]) != null ? _h : fm["book"]) != null ? _i : fm["\u4E66\u540D"]) != null ? _j : "");
+          const fmBook = String((_m = (_l = (_k = fm["\u62C6\u4E66\u9879\u76EE"]) != null ? _k : fm["book"]) != null ? _l : fm["\u4E66\u540D"]) != null ? _m : "");
           if (fmBook && fmBook !== bookTitle && fmBook !== book.bookInfo.title) continue;
           const ch = chByName.get(fmChapter);
           const dim = dimByName.get(fmDim);
@@ -3377,23 +4088,41 @@ var ChaiShuMatrixPlugin = class extends import_obsidian5.Plugin {
           changed = true;
           continue;
         }
-        const fmType = String((_l = (_k = fm["\u7C7B\u578B"]) != null ? _k : fm["type"]) != null ? _l : "");
-        const sumDim = String((_n = (_m = fm["\u7EF4\u5EA6"]) != null ? _m : fm["dimension"]) != null ? _n : "");
+        const fmType = String((_o = (_n = fm["\u7C7B\u578B"]) != null ? _n : fm["type"]) != null ? _o : "");
+        const sumDim = String((_q = (_p = fm["\u7EF4\u5EA6"]) != null ? _p : fm["dimension"]) != null ? _q : "");
         if ((fmType === "\u5377\u603B\u7ED3" || fmType === "\u5355\u5143\u603B\u7ED3") && sumDim) {
           const dim = dimByName.get(sumDim);
           if (!dim) continue;
           let target;
           if (fmType === "\u5377\u603B\u7ED3") {
-            const volName = String((_q = (_p = (_o = fm["\u6240\u5C5E\u5377"]) != null ? _o : fm["\u5377\u540D"]) != null ? _p : fm["volume"]) != null ? _q : "");
+            const volName = String((_t = (_s = (_r = fm["\u6240\u5C5E\u5377"]) != null ? _r : fm["\u5377\u540D"]) != null ? _s : fm["volume"]) != null ? _t : "");
             target = volName ? volByName.get(volName) : void 0;
           } else {
-            const unitName = String((_s = (_r = fm["\u5355\u5143\u540D"]) != null ? _r : fm["unit"]) != null ? _s : "");
+            const unitName = String((_v = (_u = fm["\u5355\u5143\u540D"]) != null ? _u : fm["unit"]) != null ? _v : "");
             target = unitName ? unitByName.get(unitName) : void 0;
           }
           if (!target) continue;
           if (!target.summaryFiles) target.summaryFiles = {};
           if (target.summaryFiles[dim.id] && resolves(target.summaryFiles[dim.id])) continue;
           target.summaryFiles[dim.id] = file.path;
+          changed = true;
+          continue;
+        }
+        if (fmType === "\u4EBA\u8BBE") {
+          const charName = String((_x = (_w = fm["\u89D2\u8272\u540D\u79F0"]) != null ? _w : fm["character"]) != null ? _x : "");
+          const charDim = String((_z = (_y = fm["\u4EBA\u8BBE\u7EF4\u5EA6"]) != null ? _y : fm["characterDimension"]) != null ? _z : "");
+          const character = charName ? charByName.get(charName) : void 0;
+          const cdim = charDim ? charDimByName.get(charDim) : void 0;
+          if (!character || !cdim) continue;
+          const key = cellKey(character.id, cdim.id);
+          const cell = book.characterCells[key];
+          if ((cell == null ? void 0 : cell.filePath) && resolves(cell.filePath)) continue;
+          if (cell) {
+            cell.filePath = file.path;
+            cell.hasContent = true;
+          } else {
+            book.characterCells[key] = { filePath: file.path, hasContent: true };
+          }
           changed = true;
         }
       }

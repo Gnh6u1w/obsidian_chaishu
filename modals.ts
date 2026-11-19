@@ -17,8 +17,17 @@ import {
   Dimension,
   EMOTION_LEVELS,
   ImportRequest,
+  BookData,
 } from "./types";
-import { ensureFolder, normalizeYAxisLabels, sanitizeFileName } from "./store";
+import {
+  cellKey,
+  collectChapters,
+  collectUnits,
+  collectVolumes,
+  ensureFolder,
+  normalizeYAxisLabels,
+  sanitizeFileName,
+} from "./store";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -1087,6 +1096,150 @@ export class MoveNodeModal extends Modal {
   }
 
   onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+// ==================================================== global note search (V2.1)
+
+interface SearchItem {
+  path: string;
+  label: string;
+  detail: string;
+  body: string;
+}
+
+/** Fuzzy search across ALL notes of the current project (chapter cells, per-dim
+ *  summaries, character notes). Keyword-match on label + frontmatter + body. */
+export class FuzzySearchModal extends Modal {
+  private book: BookData;
+  private openNote: (path: string) => void;
+  private input!: HTMLInputElement;
+  private list!: HTMLElement;
+  private items: SearchItem[] = [];
+  private timer: number | null = null;
+
+  constructor(app: App, opts: { book: BookData; onOpen: (path: string) => void }) {
+    super(app);
+    this.book = opts.book;
+    this.openNote = opts.onOpen;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("chs-modal", "chs-search-modal");
+    contentEl.createEl("h2", { text: "全局查询 · " + this.book.bookInfo.title });
+
+    this.input = contentEl.createEl("input", { type: "text" });
+    this.input.addClass("chs-search-input");
+    this.input.setAttribute("placeholder", "搜索笔记内容，如：主角 穿越");
+    this.input.addEventListener("input", () => this.scheduleSearch());
+    this.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const first = this.list.querySelector(".chs-search-item") as HTMLElement | null;
+        first?.click();
+      }
+    });
+
+    this.list = contentEl.createDiv("chs-search-results");
+    this.list.createDiv("chs-search-empty").setText("加载索引中…");
+
+    window.setTimeout(() => this.input.focus(), 50);
+    void this.loadIndex();
+  }
+
+  private async loadIndex(): Promise<void> {
+    const book = this.book;
+    const meta = new Map<string, { label: string; detail: string }>();
+
+    for (const ch of collectChapters(book.structure)) {
+      for (const d of book.dimensions) {
+        if (d.isChart) continue;
+        const c = book.cells[cellKey(ch.id, d.id)];
+        if (c?.filePath) meta.set(c.filePath, { label: ch.name + " · " + d.name, detail: "章节笔记" });
+      }
+    }
+    for (const n of [...collectVolumes(book.structure), ...collectUnits(book.structure)]) {
+      for (const d of book.dimensions) {
+        if (d.isChart) continue;
+        const p = n.summaryFiles?.[d.id];
+        if (p) {
+          meta.set(p, {
+            label: n.name + " · " + d.name + "总结",
+            detail: n.type === "volume" ? "卷总结" : "单元总结",
+          });
+        }
+      }
+    }
+    for (const ch of book.characters ?? []) {
+      for (const d of book.characterDimensions ?? []) {
+        const c = book.characterCells?.[cellKey(ch.id, d.id)];
+        if (c?.filePath) meta.set(c.filePath, { label: ch.name + " · " + d.name, detail: "人设笔记" });
+      }
+    }
+
+    this.items = [];
+    for (const [path, m] of meta) {
+      const f = this.app.vault.getAbstractFileByPath(path);
+      if (!(f instanceof TFile)) continue;
+      let body = "";
+      try {
+        body = await this.app.vault.cachedRead(f);
+      } catch (e) {
+        /* ignore */
+      }
+      this.items.push({ path, label: m.label, detail: m.detail, body });
+    }
+    this.runSearch(this.input.value);
+  }
+
+  private scheduleSearch(): void {
+    if (this.timer !== null) window.clearTimeout(this.timer);
+    this.timer = window.setTimeout(() => {
+      this.timer = null;
+      this.runSearch(this.input.value);
+    }, 150);
+  }
+
+  private runSearch(query: string): void {
+    this.list.empty();
+    const q = query.trim().toLowerCase();
+    const tokens = q.split(/\s+/).filter(Boolean);
+
+    const results = this.items.filter((it) => {
+      if (tokens.length === 0) return true;
+      const hay = (it.label + "\n" + it.detail + "\n" + it.body).toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    });
+
+    if (results.length === 0) {
+      this.list.createDiv("chs-search-empty").setText(q ? "无匹配结果" : "暂无笔记");
+      return;
+    }
+
+    for (const it of results.slice(0, 50)) {
+      const item = this.list.createDiv("chs-search-item");
+      item.createDiv("chs-search-item-label").setText(it.label);
+      item.createDiv("chs-search-item-detail").setText(it.detail);
+
+      if (tokens.length > 0) {
+        const idx = it.body.toLowerCase().indexOf(tokens[0]);
+        if (idx >= 0) {
+          const start = Math.max(0, idx - 20);
+          const snippet = it.body.slice(start, start + 80).replace(/\s+/g, " ");
+          item.createDiv("chs-search-item-snippet").setText((start > 0 ? "…" : "") + snippet + "…");
+        }
+      }
+      item.addEventListener("click", () => {
+        this.close();
+        this.openNote(it.path);
+      });
+    }
+  }
+
+  onClose(): void {
+    if (this.timer !== null) window.clearTimeout(this.timer);
     this.contentEl.empty();
   }
 }

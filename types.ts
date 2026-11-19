@@ -1,4 +1,6 @@
 export const VIEW_TYPE_CHAISHU_MATRIX = "chaishu-matrix-pro-view";
+export const VIEW_TYPE_CHAISHU_DASHBOARD = "chaishu-dashboard-view";
+export const VIEW_TYPE_CHAISHU_CHARACTER = "chaishu-character-view";
 
 export type NodeType = "volume" | "unit" | "chapter";
 
@@ -23,8 +25,6 @@ export interface NodeData {
   summaryFiles: Record<string, string>;
   children: NodeData[];
   collapsed: boolean;
-  /** Hide this volume/unit's dimension cells (focus mode, per-row). */
-  hideContent: boolean;
   /** Chapter-only: emotion values (1..5) stored in the plugin config. */
   emotionData: number[];
 }
@@ -33,6 +33,10 @@ export interface BookInfo {
   title: string;
   author: string;
   score: string;
+  /** 分类 (multi-select, supports adding custom values). */
+  category: string[];
+  /** 标签 (multi, free input, supports adding custom values). */
+  tags: string[];
   /** Vault-relative path of the wallpaper image, "" = none. */
   bgImage: string;
   bgMode: "cover" | "repeat";
@@ -46,6 +50,12 @@ export interface CellData {
   hasContent: boolean;
 }
 
+/** A character (row) in the 人设拆解 sub-matrix. */
+export interface CharacterData {
+  id: string;
+  name: string;
+}
+
 export interface BookData {
   id: string;
   bookInfo: BookInfo;
@@ -54,6 +64,10 @@ export interface BookData {
   dimensions: Dimension[];
   structure: NodeData[];
   cells: Record<string, CellData>;
+  /** 人设拆解 sub-matrix (V2.1). */
+  characters: CharacterData[];
+  characterDimensions: Dimension[];
+  characterCells: Record<string, CellData>;
 }
 
 export interface ImportRequest {
@@ -78,8 +92,6 @@ export interface ChaiShuSettings {
   outlineCollapsed: boolean;
   /** Matrix view zoom multiplier (0.6–1.6, 1 = 100%), driven by pinch on mobile. */
   matrixZoom: number;
-  /** Global focus mode: hide all volume/unit dimension cells. */
-  focusMode: boolean;
   /** Default matrix cell width in px (100–300). */
   cellWidth: number;
   /** Default matrix cell min-height in px (40–140). */
@@ -94,7 +106,6 @@ export const DEFAULT_SETTINGS: ChaiShuSettings = {
   activeBookId: "",
   outlineCollapsed: false,
   matrixZoom: 1,
-  focusMode: false,
   cellWidth: 150,
   cellHeight: 72,
   books: [],

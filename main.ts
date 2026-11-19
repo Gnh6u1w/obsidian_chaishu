@@ -1,15 +1,22 @@
 import { Plugin, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
 import { ChaiShuMatrixView } from "./matrix-view";
+import { ChaiShuCharacterView } from "./character-view";
+import { ChaiShuDashboardView } from "./dashboard-view";
 import { ChaiShuSettingTab } from "./settings";
+import { BookCreateModal } from "./modals";
 import {
   BookData,
   CellData,
+  CharacterData,
   ChaiShuSettings,
   DEFAULT_SETTINGS,
+  DEFAULT_Y_AXIS_LABELS,
   DIMENSION_COLORS,
   Dimension,
   NodeData,
   NodeType,
+  VIEW_TYPE_CHAISHU_CHARACTER,
+  VIEW_TYPE_CHAISHU_DASHBOARD,
   VIEW_TYPE_CHAISHU_MATRIX,
 } from "./types";
 import {
@@ -27,6 +34,7 @@ import {
 export default class ChaiShuMatrixPlugin extends Plugin {
   settings!: ChaiShuSettings;
   views: Set<ChaiShuMatrixView> = new Set();
+  characterViews: Set<ChaiShuCharacterView> = new Set();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -38,23 +46,38 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       return view;
     });
 
-    this.addRibbonIcon("layout-grid", "打开拆书矩阵", () => {
-      void this.activateView();
+    this.registerView(VIEW_TYPE_CHAISHU_DASHBOARD, (leaf: WorkspaceLeaf) => {
+      return new ChaiShuDashboardView(leaf, this);
+    });
+
+    this.registerView(VIEW_TYPE_CHAISHU_CHARACTER, (leaf: WorkspaceLeaf) => {
+      const view = new ChaiShuCharacterView(leaf, this);
+      this.characterViews.add(view);
+      return view;
+    });
+
+    this.addRibbonIcon("layout-grid", "打开项目大厅", () => {
+      void this.openDashboard();
     });
 
     this.addCommand({
-      id: "open-matrix",
-      name: "打开拆书矩阵",
+      id: "open-dashboard",
+      name: "打开项目大厅",
       callback: () => {
-        void this.activateView();
+        void this.openDashboard();
       },
     });
 
     this.addCommand({
       id: "new-book",
-      name: "新建拆书",
+      name: "新建拆书项目",
       callback: () => {
-        void this.activateView().then(() => this.getOpenView()?.openCreateBook());
+        void this.openDashboard().then(() => {
+          new BookCreateModal(this.app, async (title, author) => {
+            await this.createBook(title, author);
+            await this.openMatrix();
+          }).open();
+        });
       },
     });
 
@@ -71,7 +94,12 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       void this.returnToMatrix();
     });
 
-    // Make the in-note return link a reliably-clickable button in Reading/Live Preview.
+    // Character-note return link: [🔙 返回人设拆解](obsidian://chaishu-character)
+    this.registerObsidianProtocolHandler("chaishu-character", () => {
+      void this.returnToCharacter();
+    });
+
+    // Make the in-note return links reliably-clickable buttons in Reading/Live Preview.
     this.registerMarkdownPostProcessor((el) => {
       el.querySelectorAll<HTMLAnchorElement>('a[href="obsidian://chaishu-matrix-pro"]').forEach((a) => {
         a.classList.add("chs-return-link");
@@ -79,6 +107,14 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           e.preventDefault();
           e.stopPropagation();
           void this.returnToMatrix();
+        });
+      });
+      el.querySelectorAll<HTMLAnchorElement>('a[href="obsidian://chaishu-character"]').forEach((a) => {
+        a.classList.add("chs-return-link");
+        a.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          void this.returnToCharacter();
         });
       });
     });
@@ -99,7 +135,10 @@ export default class ChaiShuMatrixPlugin extends Plugin {
 
   onunload(): void {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAISHU_DASHBOARD);
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAISHU_CHARACTER);
     this.views.clear();
+    this.characterViews.clear();
   }
 
   getSettings(): ChaiShuSettings {
@@ -119,20 +158,111 @@ export default class ChaiShuMatrixPlugin extends Plugin {
 
   notifyViews(): void {
     for (const v of this.views) v.refresh();
+    for (const v of this.characterViews) v.render();
   }
 
-  async activateView(): Promise<void> {
-    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);
+  /** Open (or focus) the standalone 项目大厅 tab. */
+  async openDashboard(): Promise<void> {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_DASHBOARD);
     let leaf: WorkspaceLeaf | null = leaves[0] ?? null;
     if (!leaf) {
-      // Open as a standard main-workspace tab (not the right sidebar).
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_DASHBOARD, active: true });
+    }
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+
+  /** Open (or focus) the matrix view for a book (defaults to the active book). */
+  async openMatrix(bookId?: string): Promise<void> {
+    if (bookId) {
+      this.settings.activeBookId = bookId;
+      await this.saveSettings();
+    }
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX);
+    let leaf: WorkspaceLeaf | null = leaves[0] ?? null;
+    const existed = !!leaf;
+    if (!leaf) {
       leaf = this.app.workspace.getLeaf("tab");
       await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
     }
-    if (leaf) {
-      await this.app.workspace.revealLeaf(leaf);
-      this.app.workspace.setActiveLeaf(leaf, { focus: true });
+    if (existed && leaf.view instanceof ChaiShuMatrixView) {
+      leaf.view.activeBookId = this.settings.activeBookId;
+      leaf.view.refresh();
     }
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+
+  /** Open (or focus) the 人设拆解 sub-matrix for a book. */
+  async openCharacterView(bookId: string): Promise<void> {
+    this.settings.activeBookId = bookId;
+    await this.saveSettings();
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_CHARACTER);
+    let leaf: WorkspaceLeaf | null = leaves[0] ?? null;
+    const existed = !!leaf;
+    if (!leaf) {
+      leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_CHARACTER, active: true });
+    }
+    if (existed && leaf.view instanceof ChaiShuCharacterView) {
+      leaf.view.setBook(bookId);
+    }
+    await this.app.workspace.revealLeaf(leaf);
+    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  }
+
+  /** Create a new book (with default chapters + dimensions) and persist it. */
+  async createBook(title: string, author: string): Promise<BookData> {
+    const settings = this.settings;
+    const dims = settings.defaultDimensionNames.split(/[,，、\s]+/).filter(Boolean);
+    const dimensions: Dimension[] = dims.map((name, i) => ({
+      id: uid("d"),
+      name: sanitizeFileName(name),
+      color: DIMENSION_COLORS[i % DIMENSION_COLORS.length],
+      isChart: name === "情绪",
+      yAxisLabels: [...DEFAULT_Y_AXIS_LABELS],
+    }));
+    const count = Math.max(1, Math.min(500, settings.defaultChapterCount || 5));
+    const structure: NodeData[] = [];
+    for (let i = 1; i <= count; i++) {
+      structure.push(createNode("chapter", "第" + i + "章"));
+    }
+
+    const book: BookData = {
+      id: uid("book"),
+      bookInfo: {
+        title,
+        author,
+        score: "",
+        category: [],
+        tags: [],
+        bgImage: "",
+        bgMode: "cover",
+        bgOverlay: 0.3,
+      },
+      storagePath: settings.defaultStoragePath || "",
+      dimensions: dimensions.length
+        ? dimensions
+        : [
+            {
+              id: uid("d"),
+              name: "情绪",
+              color: DIMENSION_COLORS[0],
+              isChart: true,
+              yAxisLabels: [...DEFAULT_Y_AXIS_LABELS],
+            },
+          ],
+      structure,
+      cells: {},
+      characters: [],
+      characterDimensions: [],
+      characterCells: {},
+    };
+    settings.books.push(book);
+    settings.activeBookId = book.id;
+    await this.saveSettings();
+    return book;
   }
 
   /**
@@ -144,11 +274,11 @@ export default class ChaiShuMatrixPlugin extends Plugin {
     const matrixLeaf = workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_MATRIX)[0] ?? null;
     const activeLeaf = workspace.activeLeaf;
 
-    // Close the note leaf we are returning from (never the matrix itself).
+    // Close the note leaf we are returning from (never a plugin view).
     if (
       activeLeaf &&
       activeLeaf !== matrixLeaf &&
-      activeLeaf.view?.getViewType() !== VIEW_TYPE_CHAISHU_MATRIX
+      !this.isPluginView(activeLeaf.view?.getViewType())
     ) {
       activeLeaf.detach();
     }
@@ -161,6 +291,38 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_MATRIX, active: true });
       workspace.setActiveLeaf(leaf, { focus: true });
     }
+  }
+
+  /** Return from a character note: close the note leaf, then reveal the 人设拆解 view. */
+  async returnToCharacter(): Promise<void> {
+    const workspace = this.app.workspace;
+    const charLeaf = workspace.getLeavesOfType(VIEW_TYPE_CHAISHU_CHARACTER)[0] ?? null;
+    const activeLeaf = workspace.activeLeaf;
+
+    if (
+      activeLeaf &&
+      activeLeaf !== charLeaf &&
+      !this.isPluginView(activeLeaf.view?.getViewType())
+    ) {
+      activeLeaf.detach();
+    }
+
+    if (charLeaf) {
+      await workspace.revealLeaf(charLeaf);
+      workspace.setActiveLeaf(charLeaf, { focus: true });
+    } else {
+      const leaf = workspace.getLeaf("tab");
+      await leaf.setViewState({ type: VIEW_TYPE_CHAISHU_CHARACTER, active: true });
+      workspace.setActiveLeaf(leaf, { focus: true });
+    }
+  }
+
+  private isPluginView(viewType: string | undefined): boolean {
+    return (
+      viewType === VIEW_TYPE_CHAISHU_MATRIX ||
+      viewType === VIEW_TYPE_CHAISHU_DASHBOARD ||
+      viewType === VIEW_TYPE_CHAISHU_CHARACTER
+    );
   }
 
   getOpenView(): ChaiShuMatrixView | null {
@@ -204,6 +366,12 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       title: b.bookInfo?.title ?? "未命名拆书",
       author: b.bookInfo?.author ?? "",
       score: b.bookInfo?.score ?? "",
+      category: Array.isArray(b.bookInfo?.category)
+        ? b.bookInfo.category.map((c: unknown) => String(c)).filter(Boolean)
+        : [],
+      tags: Array.isArray(b.bookInfo?.tags)
+        ? b.bookInfo.tags.map((t: unknown) => String(t)).filter(Boolean)
+        : [],
       bgImage: b.bookInfo?.bgImage ?? "",
       bgMode: (b.bookInfo?.bgMode === "repeat" ? "repeat" : "cover") as "cover" | "repeat",
       bgOverlay: typeof b.bookInfo?.bgOverlay === "number" ? b.bookInfo.bgOverlay : 0.3,
@@ -282,6 +450,26 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       }
     }
 
+    const characters: CharacterData[] = Array.isArray(b.characters)
+      ? b.characters.map((c: any) => ({
+          id: c?.id ?? uid("p"),
+          name: sanitizeFileName(c?.name ?? "角色"),
+        }))
+      : [];
+
+    const characterDimensions: Dimension[] = Array.isArray(b.characterDimensions)
+      ? b.characterDimensions.map((d: any) => ({
+          id: d.id ?? uid("d"),
+          name: d.name ?? "维度",
+          color: d.color ?? DIMENSION_COLORS[0],
+          isChart: false,
+          yAxisLabels: [],
+        }))
+      : [];
+
+    const characterCells: Record<string, CellData> =
+      b.characterCells && typeof b.characterCells === "object" ? b.characterCells : {};
+
     return {
       id: b.id ?? uid("book"),
       bookInfo,
@@ -289,6 +477,9 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       dimensions,
       structure,
       cells,
+      characters,
+      characterDimensions,
+      characterCells,
     };
   }
 
@@ -307,7 +498,6 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         ? n.children.map((c: any) => this.normalizeNode(c))
         : [],
       collapsed: !!n.collapsed,
-      hideContent: !!n.hideContent,
       emotionData: Array.isArray(n.emotionData)
         ? (n.emotionData as unknown[]).map((v) => Number(v)).filter((v) => Number.isFinite(v))
         : [],
@@ -334,6 +524,13 @@ export default class ChaiShuMatrixPlugin extends Plugin {
     for (const book of this.settings.books) {
       for (const key of Object.keys(book.cells)) {
         const cell = book.cells[key];
+        if (cell.filePath === oldPath) {
+          cell.filePath = file.path;
+          changed = true;
+        }
+      }
+      for (const key of Object.keys(book.characterCells ?? {})) {
+        const cell = book.characterCells[key];
         if (cell.filePath === oldPath) {
           cell.filePath = file.path;
           changed = true;
@@ -367,6 +564,14 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           changed = true;
         }
       }
+      for (const key of Object.keys(book.characterCells ?? {})) {
+        const cell = book.characterCells[key];
+        if (cell.filePath === file.path) {
+          cell.filePath = "";
+          cell.hasContent = false;
+          changed = true;
+        }
+      }
       for (const node of this.allNodes(book)) {
         if (node.type === "chapter") continue;
         for (const dimId of Object.keys(node.summaryFiles ?? {})) {
@@ -385,7 +590,7 @@ export default class ChaiShuMatrixPlugin extends Plugin {
 
   // ------------------------------------------------------ note re-linking
 
-  /** Re-link cell/summary notes whose stored path no longer resolves (e.g. after
+  /** Re-link cell/summary/character notes whose stored path no longer resolves (e.g. after
    *  an upgrade moved or renamed files). Matches notes by their frontmatter. */
   private async relinkNotes(): Promise<void> {
     const vault = this.app.vault;
@@ -414,6 +619,12 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           }
         }
       }
+      for (const c of Object.values(book.characterCells ?? {})) {
+        if (c.filePath && !resolves(c.filePath)) {
+          stale = true;
+          break outer;
+        }
+      }
     }
     if (!stale) return;
 
@@ -431,6 +642,10 @@ export default class ChaiShuMatrixPlugin extends Plugin {
         if (n.type === "volume") volByName.set(n.name, n);
         else if (n.type === "unit") unitByName.set(n.name, n);
       }
+      const charByName = new Map<string, CharacterData>();
+      for (const c of book.characters ?? []) charByName.set(c.name, c);
+      const charDimByName = new Map<string, Dimension>();
+      for (const d of book.characterDimensions ?? []) charDimByName.set(d.name, d);
 
       for (const file of files) {
         const cache = this.app.metadataCache.getFileCache(file);
@@ -477,6 +692,26 @@ export default class ChaiShuMatrixPlugin extends Plugin {
           if (!target.summaryFiles) target.summaryFiles = {};
           if (target.summaryFiles[dim.id] && resolves(target.summaryFiles[dim.id])) continue;
           target.summaryFiles[dim.id] = file.path;
+          changed = true;
+          continue;
+        }
+
+        // --- character dimension notes (V2.1) ---
+        if (fmType === "人设") {
+          const charName = String(fm["角色名称"] ?? fm["character"] ?? "");
+          const charDim = String(fm["人设维度"] ?? fm["characterDimension"] ?? "");
+          const character = charName ? charByName.get(charName) : undefined;
+          const cdim = charDim ? charDimByName.get(charDim) : undefined;
+          if (!character || !cdim) continue;
+          const key = cellKey(character.id, cdim.id);
+          const cell = book.characterCells[key];
+          if (cell?.filePath && resolves(cell.filePath)) continue;
+          if (cell) {
+            cell.filePath = file.path;
+            cell.hasContent = true;
+          } else {
+            book.characterCells[key] = { filePath: file.path, hasContent: true };
+          }
           changed = true;
         }
       }
