@@ -1,7 +1,6 @@
-import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
+import { ItemView, Notice, WorkspaceLeaf, setIcon } from "obsidian";
 import type ChaiShuMatrixPlugin from "./main";
 import { BookData, VIEW_TYPE_CHAISHU_DASHBOARD } from "./types";
-import { BookCreateModal } from "./modals";
 
 /** 项目大厅 (Dashboard): standalone tab opened by the ribbon icon / command.
  *  Lists all 拆书项目 with fuzzy search + category/tag filters (with badge counts). */
@@ -12,6 +11,7 @@ export class ChaiShuDashboardView extends ItemView {
   private categorySelect!: HTMLSelectElement;
   private tagSelect!: HTMLSelectElement;
   private listEl!: HTMLElement;
+  private createFormEl: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: ChaiShuMatrixPlugin) {
     super(leaf);
@@ -182,9 +182,55 @@ export class ChaiShuDashboardView extends ItemView {
   }
 
   private openCreateBook(): void {
-    new BookCreateModal(this.app, async (title, author) => {
-      await this.plugin.createBook(title, author);
+    // V2.3.1: inline creation panel (no centered modal) — unified entry.
+    if (this.createFormEl) {
+      const input = this.createFormEl.querySelector("input") as HTMLInputElement | null;
+      input?.focus();
+      return;
+    }
+    const form = this.contentEl.createDiv("chs-dash-create");
+    const titleRow = form.createDiv("chs-dash-create-title");
+    titleRow.setText("新建拆书项目");
+
+    const nameInput = form.createEl("input", { type: "text" });
+    nameInput.addClass("chs-input");
+    nameInput.setAttribute("placeholder", "拆书名称（必填）");
+
+    const authorInput = form.createEl("input", { type: "text" });
+    authorInput.addClass("chs-input");
+    authorInput.setAttribute("placeholder", "作者（可选）");
+
+    const actions = form.createDiv("chs-dash-create-actions");
+    const okBtn = actions.createEl("button", {
+      text: "创建",
+      cls: "chs-btn chs-btn-primary",
+    });
+    const cancelBtn = actions.createEl("button", { text: "取消", cls: "chs-btn" });
+
+    const close = () => {
+      form.remove();
+      this.createFormEl = null;
+    };
+
+    okBtn.addEventListener("click", async () => {
+      const title = nameInput.value.trim();
+      if (!title) {
+        new Notice("请输入拆书名称");
+        return;
+      }
+      await this.plugin.createBook(title, authorInput.value.trim());
+      close();
       await this.plugin.openMatrix();
-    }).open();
+    });
+    cancelBtn.addEventListener("click", close);
+
+    this.createFormEl = form;
+    const head = this.contentEl.querySelector(".chs-dash-head");
+    if (head?.nextSibling) {
+      this.contentEl.insertBefore(form, head.nextSibling);
+    } else {
+      this.contentEl.prepend(form);
+    }
+    nameInput.focus();
   }
 }

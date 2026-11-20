@@ -3,7 +3,6 @@ import { ChaiShuMatrixView } from "./matrix-view";
 import { ChaiShuCharacterView } from "./character-view";
 import { ChaiShuDashboardView } from "./dashboard-view";
 import { ChaiShuSettingTab } from "./settings";
-import { BookCreateModal } from "./modals";
 import {
   BookData,
   CellData,
@@ -72,12 +71,8 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       id: "new-book",
       name: "新建拆书项目",
       callback: () => {
-        void this.openDashboard().then(() => {
-          new BookCreateModal(this.app, async (title, author) => {
-            await this.createBook(title, author);
-            await this.openMatrix();
-          }).open();
-        });
+        // V2.3.1: unified entry — just open the dashboard; creation is inline there.
+        void this.openDashboard();
       },
     });
 

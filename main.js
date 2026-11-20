@@ -1421,6 +1421,27 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       this.activeBookId = "";
     }
     this.render();
+    this.registerViewportHeight();
+  }
+  /** V2.3.1: on mobile, keep the view height synced to the visual viewport so
+   *  the soft keyboard never occludes inputs with a white screen. */
+  registerViewportHeight() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const sync = () => {
+      if (!this.isCompactViewport()) {
+        this.contentEl.style.height = "";
+        return;
+      }
+      const rect = this.contentEl.getBoundingClientRect();
+      const available = vv.height - rect.top;
+      if (available > 120) {
+        this.contentEl.style.height = Math.round(available) + "px";
+      }
+    };
+    sync();
+    vv.addEventListener("resize", sync);
+    this.register(() => vv.removeEventListener("resize", sync));
   }
   async onClose() {
     var _a;
@@ -2408,7 +2429,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
   }
   isCompactViewport() {
     return window.matchMedia(
-      "(max-width: 640px), (max-height: 500px) and (orientation: landscape)"
+      "(max-width: 768px), (max-height: 500px) and (orientation: landscape)"
     ).matches;
   }
   /** V2.0: apply the pinch zoom + settings-driven cell size to CSS variables. */
@@ -4030,6 +4051,7 @@ var import_obsidian5 = require("obsidian");
 var ChaiShuDashboardView = class extends import_obsidian5.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
+    this.createFormEl = null;
     this.plugin = plugin;
   }
   getViewType() {
@@ -4175,10 +4197,49 @@ var ChaiShuDashboardView = class extends import_obsidian5.ItemView {
     }
   }
   openCreateBook() {
-    new BookCreateModal(this.app, async (title, author) => {
-      await this.plugin.createBook(title, author);
+    if (this.createFormEl) {
+      const input = this.createFormEl.querySelector("input");
+      input == null ? void 0 : input.focus();
+      return;
+    }
+    const form = this.contentEl.createDiv("chs-dash-create");
+    const titleRow = form.createDiv("chs-dash-create-title");
+    titleRow.setText("\u65B0\u5EFA\u62C6\u4E66\u9879\u76EE");
+    const nameInput = form.createEl("input", { type: "text" });
+    nameInput.addClass("chs-input");
+    nameInput.setAttribute("placeholder", "\u62C6\u4E66\u540D\u79F0\uFF08\u5FC5\u586B\uFF09");
+    const authorInput = form.createEl("input", { type: "text" });
+    authorInput.addClass("chs-input");
+    authorInput.setAttribute("placeholder", "\u4F5C\u8005\uFF08\u53EF\u9009\uFF09");
+    const actions = form.createDiv("chs-dash-create-actions");
+    const okBtn = actions.createEl("button", {
+      text: "\u521B\u5EFA",
+      cls: "chs-btn chs-btn-primary"
+    });
+    const cancelBtn = actions.createEl("button", { text: "\u53D6\u6D88", cls: "chs-btn" });
+    const close = () => {
+      form.remove();
+      this.createFormEl = null;
+    };
+    okBtn.addEventListener("click", async () => {
+      const title = nameInput.value.trim();
+      if (!title) {
+        new import_obsidian5.Notice("\u8BF7\u8F93\u5165\u62C6\u4E66\u540D\u79F0");
+        return;
+      }
+      await this.plugin.createBook(title, authorInput.value.trim());
+      close();
       await this.plugin.openMatrix();
-    }).open();
+    });
+    cancelBtn.addEventListener("click", close);
+    this.createFormEl = form;
+    const head = this.contentEl.querySelector(".chs-dash-head");
+    if (head == null ? void 0 : head.nextSibling) {
+      this.contentEl.insertBefore(form, head.nextSibling);
+    } else {
+      this.contentEl.prepend(form);
+    }
+    nameInput.focus();
   }
 };
 
@@ -4360,12 +4421,7 @@ var ChaiShuMatrixPlugin = class extends import_obsidian7.Plugin {
       id: "new-book",
       name: "\u65B0\u5EFA\u62C6\u4E66\u9879\u76EE",
       callback: () => {
-        void this.openDashboard().then(() => {
-          new BookCreateModal(this.app, async (title, author) => {
-            await this.createBook(title, author);
-            await this.openMatrix();
-          }).open();
-        });
+        void this.openDashboard();
       }
     });
     this.addCommand({

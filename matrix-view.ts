@@ -183,6 +183,28 @@ export class ChaiShuMatrixView extends ItemView {
       this.activeBookId = "";
     }
     this.render();
+    this.registerViewportHeight();
+  }
+
+  /** V2.3.1: on mobile, keep the view height synced to the visual viewport so
+   *  the soft keyboard never occludes inputs with a white screen. */
+  private registerViewportHeight(): void {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const sync = () => {
+      if (!this.isCompactViewport()) {
+        this.contentEl.style.height = "";
+        return;
+      }
+      const rect = this.contentEl.getBoundingClientRect();
+      const available = vv.height - rect.top;
+      if (available > 120) {
+        this.contentEl.style.height = Math.round(available) + "px";
+      }
+    };
+    sync();
+    vv.addEventListener("resize", sync);
+    this.register(() => vv.removeEventListener("resize", sync));
   }
 
   async onClose(): Promise<void> {
@@ -1323,7 +1345,7 @@ export class ChaiShuMatrixView extends ItemView {
 
   private isCompactViewport(): boolean {
     return window.matchMedia(
-      "(max-width: 640px), (max-height: 500px) and (orientation: landscape)"
+      "(max-width: 768px), (max-height: 500px) and (orientation: landscape)"
     ).matches;
   }
 
