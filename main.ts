@@ -71,7 +71,6 @@ export default class ChaiShuMatrixPlugin extends Plugin {
       id: "new-book",
       name: "新建拆书项目",
       callback: () => {
-        // V2.3.1: unified entry — just open the dashboard; creation is inline there.
         void this.openDashboard();
       },
     });

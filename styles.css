@@ -116,6 +116,11 @@
   padding-bottom: 2px;
 }
 
+/* V2.3: 展开/收起信息 toggle — hidden on desktop, shown only on mobile. */
+.chs-bookinfo-toggle {
+  display: none;
+}
+
 /* --------------------------------------------------------------- inputs */
 .chs-input {
   width: 100%;
@@ -372,9 +377,6 @@
   box-sizing: border-box;
 }
 
-/* Freeze the header row (大纲/章节 corner + dimension labels) on vertical
-   scroll. thead-level sticky is the most reliable across desktop Chrome and
-   iOS Safari; the th-level `top:0` sticky below acts as a fallback. */
 .chs-matrix thead {
   position: sticky;
   top: 0;
@@ -983,13 +985,12 @@ tr.chs-drop-root {
     --chs-col-w: 120px;
   }
 
-  /* V2.2: header must never overflow horizontally — stack every field
-     full-width (label above input), let the action buttons wrap. */
+  /* V2.3: full-width fields + collapse panel (default shows only 书名 + toggle). */
   .chs-bookinfo {
     display: flex;
     flex-direction: column;
-    gap: 6px;
     align-items: stretch;
+    gap: 6px;
   }
 
   .chs-field,
@@ -997,36 +998,32 @@ tr.chs-drop-root {
     flex: 1 1 100%;
     width: 100%;
     min-width: 0;
-    gap: 3px;
   }
 
   .chs-field-label {
     display: block;
-    font-size: 12px;
+  }
+
+  .chs-bookinfo-toggle {
+    display: inline-flex;
+    align-self: flex-start;
+  }
+
+  .chs-bookinfo .chs-bookinfo-secondary {
+    display: none;
+  }
+
+  .chs-bookinfo.chs-bookinfo-expanded .chs-bookinfo-secondary {
+    display: flex;
   }
 
   .chs-bookinfo-actions {
-    flex-wrap: wrap;
     width: 100%;
+    flex-wrap: wrap;
   }
 
   .chs-bookinfo-actions .chs-btn {
     flex: 1 1 auto;
-  }
-
-  /* Top bar: project selector takes its own full-width row; buttons wrap. */
-  .chs-book-row {
-    gap: 6px;
-  }
-
-  .chs-book-row .chs-select {
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-
-  .chs-toolbar-left,
-  .chs-toolbar-mid {
-    width: 100%;
   }
 
   .chs-input {
@@ -1044,6 +1041,12 @@ tr.chs-drop-root {
   .chs-stats {
     margin-left: 0;
     width: 100%;
+  }
+
+  .chs-toolbar-left,
+  .chs-toolbar-mid {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .chs-matrix-scroll {
@@ -1143,27 +1146,28 @@ tr.chs-drop-root {
   font-weight: 700;
 }
 
-/* V2.3.1: inline project-creation panel (replaces the centered modal) */
+/* V2.3: inline create panel (replaces the old centered modal). */
 .chs-dash-create {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 14px 16px;
   margin-bottom: 16px;
-  border: 1px solid var(--interactive-accent);
+  padding: 12px;
+  border: 1px solid var(--background-modifier-border);
   border-radius: 10px;
   background: var(--background-secondary);
 }
 
 .chs-dash-create-title {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .chs-dash-create-actions {
   display: flex;
   gap: 8px;
-  margin-top: 4px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .chs-dash-controls {
@@ -1415,46 +1419,6 @@ tr.chs-drop-root {
 
 .chs-graph-canvas:active {
   cursor: grabbing;
-}
-
-/* V2.3: Mermaid-rendered relationship diagram (replaces hand-rolled canvas). */
-.chs-graph-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-}
-
-.chs-legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.chs-legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-}
-
-.chs-legend-label {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.chs-graph-mermaid {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 10px;
-  background: var(--background-primary);
-  padding: 12px;
-}
-
-.chs-graph-mermaid .mermaid {
-  display: flex;
-  justify-content: center;
 }
 
 .chs-char-title {

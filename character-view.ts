@@ -1,4 +1,4 @@
-import { ItemView, MarkdownRenderer, Menu, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
+import { ItemView, Menu, Notice, Platform, setIcon, TFile, WorkspaceLeaf } from "obsidian";
 import type ChaiShuMatrixPlugin from "./main";
 import {
   BookData,
@@ -15,7 +15,7 @@ import {
   sanitizeFileName,
   uid,
 } from "./store";
-import { ConfirmModal, DimensionModal, PromptModal, RelationshipModal } from "./modals";
+import { ConfirmModal, DimensionModal, PromptModal } from "./modals";
 
 const MAX_PREVIEW = 200;
 
@@ -137,22 +137,24 @@ export class ChaiShuCharacterView extends ItemView {
     const back = row.createEl("button", { text: "← 返回拆书项目", cls: "chs-btn" });
     back.addEventListener("click", () => void this.returnToMatrix());
     row.createSpan("chs-char-title").setText("人设拆解 · " + book.bookInfo.title);
+    // V2.3: reuse Obsidian's native relationship graph (character notes are auto-tagged).
+    const nativeGraph = row.createEl("button", {
+      text: "🕸️ 打开关系图谱",
+      cls: "chs-btn",
+      title: "在 Obsidian 原生关系图谱中查看角色关系",
+    });
+    nativeGraph.addEventListener("click", () => {
+      // Open Obsidian's native global graph view (character notes carry
+      // `tags: [人设, 《书名》]` so they cluster + filter there).
+      void (async () => {
+        const leaf = this.app.workspace.getLeaf("tab");
+        await leaf.setViewState({ type: "graph", active: true });
+        this.app.workspace.revealLeaf(leaf);
+      })();
+    });
 
     const toolbar = contentEl.createDiv("chs-toolbar");
     const left = toolbar.createDiv("chs-toolbar-left");
-
-    // view switch: 表格视图 / 关系图谱视图
-    const seg = left.createDiv("chs-seg");
-    const tableBtn = seg.createEl("button", {
-      text: "表格视图",
-      cls: "chs-btn" + (this.viewMode === "table" ? " chs-btn-primary" : ""),
-    });
-    tableBtn.addEventListener("click", () => this.setViewMode("table"));
-    const graphBtn = seg.createEl("button", {
-      text: "关系图谱",
-      cls: "chs-btn" + (this.viewMode === "graph" ? " chs-btn-primary" : ""),
-    });
-    graphBtn.addEventListener("click", () => this.setViewMode("graph"));
 
     const addChar = left.createEl("button", { text: "＋ 添加角色", cls: "chs-btn chs-btn-primary" });
     addChar.addEventListener("click", () => this.addCharacter());
@@ -756,92 +758,43 @@ export class ChaiShuCharacterView extends ItemView {
     const wrap = this.contentEl.createDiv("chs-graph-wrap");
 
     const controls = wrap.createDiv("chs-graph-controls");
-    controls.createSpan("chs-graph-hint").setText(
-      "节点按阵营着色 · 实线 = 手动关系 · 虚线 = 双链自动推导"
-    );
-    const addRel = controls.createEl("button", {
-      text: "＋ 添加关系",
-      cls: "chs-btn chs-btn-sm chs-btn-primary",
+    controls.createSpan("chs-graph-hint").setText("拖拽节点移动 · 滚轮/双指缩放 · 拖拽两节点连线建关系 · 点击节点聚焦");
+    const seg = controls.createDiv("chs-seg");
+    const factionBtn = seg.createEl("button", {
+      text: "阵营着色",
+      cls: "chs-btn chs-btn-sm" + (this.graphColorMode === "faction" ? " chs-btn-primary" : ""),
     });
-    addRel.addEventListener("click", () => this.openAddRelationship(book));
+    factionBtn.addEventListener("click", () => {
+      this.graphColorMode = "faction";
+      this.render();
+    });
+    const relBtn = seg.createEl("button", {
+      text: "关系圈着色",
+      cls: "chs-btn chs-btn-sm" + (this.graphColorMode === "relation" ? " chs-btn-primary" : ""),
+    });
+    relBtn.addEventListener("click", () => {
+      this.graphColorMode = "relation";
+      this.render();
+    });
 
-    // faction legend
-    const legend = wrap.createDiv("chs-graph-legend");
-    const factions = book.factions ?? [];
-    const legendItem = (color: string, label: string) => {
-      const item = legend.createDiv("chs-legend-item");
-      item.createSpan("chs-legend-dot").style.background = color;
-      item.createSpan("chs-legend-label").setText(label);
-    };
-    for (const f of factions) legendItem(f.color || "#8b9bb4", f.name);
-    const unassigned = book.characters.filter((c) => !c.factionId).length;
-    if (unassigned > 0) legendItem("#8b9bb4", "未分配");
+    const canvas = wrap.createEl("canvas");
+    canvas.addClass("chs-graph-canvas");
+    this.graphCanvas = canvas;
+    this.graphCtx = canvas.getContext("2d") as CanvasRenderingContext2D;
 
-    // Render the diagram with Obsidian's native Mermaid renderer.
-    const body = wrap.createDiv("chs-graph-mermaid");
     this.computeGraph(book);
-    const source = this.buildMermaidSource(book);
-    void MarkdownRenderer.render(this.app, "```mermaid\n" + source + "\n```", body, "", this);
-  }
+    this.initGraphPositions(book);
 
-  /** Serialise the character graph into a Mermaid `graph TD` diagram. */
-  private buildMermaidSource(book: BookData): string {
-    const esc = (s: string) => s.replace(/[`"|\\]/g, " ").replace(/\s+/g, " ").trim();
-    const chars = book.characters ?? [];
-    const factions = book.factions ?? [];
-    const lines: string[] = [
-      "graph TD",
-      '  classDef clsNone fill:#8b9bb4,stroke:#334155,color:#fff;',
-    ];
-    factions.forEach((f, i) => {
-      lines.push(`  classDef cls${i} fill:${f.color || "#8b9bb4"},stroke:#334155,color:#fff;`);
-    });
+    // Interaction via Pointer Events (unified mouse + touch).
+    canvas.addEventListener("pointerdown", (e) => this.onGraphPointerDown(e));
+    canvas.addEventListener("pointermove", (e) => this.onGraphPointerMove(e));
+    canvas.addEventListener("pointerup", (e) => this.onGraphPointerUp(e));
+    canvas.addEventListener("pointercancel", (e) => this.onGraphPointerUp(e));
+    canvas.addEventListener("wheel", (e) => this.onGraphWheel(e), { passive: false });
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-    const idOf = new Map<string, string>();
-    chars.forEach((c, i) => idOf.set(c.id, "n" + i));
-
-    const nodeClass = (c: CharacterData): string => {
-      if (!c.factionId) return "clsNone";
-      const idx = factions.findIndex((f) => f.id === c.factionId);
-      return idx >= 0 ? `cls${idx}` : "clsNone";
-    };
-
-    for (const c of chars) {
-      lines.push(`  ${idOf.get(c.id)}["${esc(c.name) || "（未命名）"}"]:::${nodeClass(c)}`);
-    }
-    if (chars.length === 0) {
-      lines.push('  empty["（暂无角色）"]:::clsNone');
-    }
-
-    for (const e of this.graphEdges) {
-      const a = idOf.get(e.from);
-      const b = idOf.get(e.to);
-      if (!a || !b) continue;
-      const label = esc(e.type) || "关联";
-      lines.push(e.explicit ? `  ${a} -->|${label}| ${b}` : `  ${a} -.->|${label}| ${b}`);
-    }
-
-    return lines.join("\n");
-  }
-
-  /** Manual relationship creation: pick two characters + a type. */
-  private openAddRelationship(book: BookData): void {
-    if (book.characters.length < 2) {
-      new Notice("至少需要两个角色才能建立关系");
-      return;
-    }
-    new RelationshipModal(this.app, {
-      characters: book.characters,
-      onSubmit: (from, to, type) => {
-        const t = sanitizeFileName(type) || "关联";
-        book.relationships = (book.relationships ?? []).filter(
-          (r) => !((r.from === from && r.to === to) || (r.from === to && r.to === from))
-        );
-        book.relationships.push({ id: uid("r"), from, to, type: t, explicit: true });
-        void this.plugin.saveSettings();
-        this.render();
-      },
-    }).open();
+    this.resizeGraphCanvas();
+    this.startGraphLoop(book);
   }
 
   private resizeGraphCanvas(): void {
@@ -1010,34 +963,6 @@ export class ChaiShuCharacterView extends ItemView {
       // keep inside a soft bounds
       n.x = Math.max(-W, Math.min(W, n.x));
       n.y = Math.max(-H, Math.min(H, n.y));
-    }
-
-    // collision avoidance — enforce a minimum gap so node circles (and their
-    // labels) never overlap, no matter how many edges pull them together.
-    // minGap is in world units; the screen gap scales with graphZoom.
-    const minGap = 48;
-    for (let i = 0; i < ids.length; i++) {
-      for (let j = i + 1; j < ids.length; j++) {
-        const a = nodes.get(ids[i])!;
-        const b = nodes.get(ids[j])!;
-        let dx = a.x - b.x;
-        let dy = a.y - b.y;
-        let d = Math.sqrt(dx * dx + dy * dy);
-        if (d < minGap) {
-          if (d < 0.01) {
-            dx = Math.random() - 0.5;
-            dy = Math.random() - 0.5;
-            d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-          }
-          const push = (minGap - d) * 0.5;
-          const nx = dx / d;
-          const ny = dy / d;
-          a.x += nx * push;
-          a.y += ny * push;
-          b.x -= nx * push;
-          b.y -= ny * push;
-        }
-      }
     }
   }
 

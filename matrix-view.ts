@@ -186,7 +186,7 @@ export class ChaiShuMatrixView extends ItemView {
     this.registerViewportHeight();
   }
 
-  /** V2.3.1: on mobile, keep the view height synced to the visual viewport so
+  /** V2.3: on mobile, keep the view height synced to the visual viewport so
    *  the soft keyboard never occludes inputs with a white screen. */
   private registerViewportHeight(): void {
     const vv = window.visualViewport;
@@ -346,14 +346,33 @@ export class ChaiShuMatrixView extends ItemView {
       this.syncSelectText();
       this.scheduleSave();
     });
+
+    // V2.3: mobile collapse panel — 作者/成绩/分类/标签 are "secondary" and
+    // collapse behind an 展开信息 toggle on small screens (always visible on PC).
+    const toggle = info.createEl("button", {
+      text: "▾ 展开信息",
+      cls: "chs-btn chs-btn-sm chs-bookinfo-toggle",
+    });
+    toggle.setAttribute("type", "button");
+    toggle.addEventListener("click", () => {
+      const expanded = info.hasClass("chs-bookinfo-expanded");
+      if (expanded) {
+        info.removeClass("chs-bookinfo-expanded");
+        toggle.setText("▾ 展开信息");
+      } else {
+        info.addClass("chs-bookinfo-expanded");
+        toggle.setText("▴ 收起信息");
+      }
+    });
+
     this.makeField(info, "作者", book.bookInfo.author, (v) => {
       book.bookInfo.author = v;
       this.scheduleSave();
-    });
+    }, "chs-bookinfo-secondary");
     this.makeField(info, "成绩", book.bookInfo.score, (v) => {
       book.bookInfo.score = v;
       this.scheduleSave();
-    });
+    }, "chs-bookinfo-secondary");
 
     // V2.1: 分类 (multi, custom) + 标签 (multi, free input).
     this.buildChipField(
@@ -363,7 +382,8 @@ export class ChaiShuMatrixView extends ItemView {
       (vals) => {
         book.bookInfo.category = vals;
         this.scheduleSave();
-      }
+      },
+      "chs-bookinfo-secondary"
     );
     this.buildChipField(
       info,
@@ -372,7 +392,8 @@ export class ChaiShuMatrixView extends ItemView {
       (vals) => {
         book.bookInfo.tags = vals;
         this.scheduleSave();
-      }
+      },
+      "chs-bookinfo-secondary"
     );
 
     const actions = info.createDiv("chs-bookinfo-actions");
@@ -386,15 +407,24 @@ export class ChaiShuMatrixView extends ItemView {
     parent: HTMLElement,
     label: string,
     value: string,
-    onChange: (v: string) => void
+    onChange: (v: string) => void,
+    extraCls?: string
   ): HTMLInputElement {
-    const field = parent.createDiv("chs-field");
+    const field = parent.createDiv(
+      "chs-field" + (extraCls ? " " + extraCls : "")
+    );
     field.createSpan("chs-field-label").setText(label);
     const input = field.createEl("input", { type: "text" });
     input.addClass("chs-input");
     input.value = value;
     input.setAttribute("placeholder", label);
     input.addEventListener("input", () => onChange(input.value));
+    input.addEventListener("focus", () => {
+      // V2.3: keep the focused input above the soft keyboard (mobile).
+      window.setTimeout(() => {
+        input.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 60);
+    });
     return input;
   }
 
@@ -403,9 +433,12 @@ export class ChaiShuMatrixView extends ItemView {
     parent: HTMLElement,
     label: string,
     get: () => string[],
-    set: (vals: string[]) => void
+    set: (vals: string[]) => void,
+    extraCls?: string
   ): void {
-    const field = parent.createDiv("chs-field chs-field-chips");
+    const field = parent.createDiv(
+      "chs-field chs-field-chips" + (extraCls ? " " + extraCls : "")
+    );
     field.createSpan("chs-field-label").setText(label);
     const chips = field.createDiv("chs-chips");
 
@@ -425,6 +458,12 @@ export class ChaiShuMatrixView extends ItemView {
       const input = chips.createEl("input", { type: "text" });
       input.addClass("chs-chip-input");
       input.setAttribute("placeholder", "＋ 添加");
+      input.addEventListener("focus", () => {
+        // V2.3: keep the focused chip input above the soft keyboard (mobile).
+        window.setTimeout(() => {
+          input.scrollIntoView({ block: "center", behavior: "smooth" });
+        }, 60);
+      });
       const commit = () => {
         const vals = get();
         const v = sanitizeFileName(input.value.trim());
@@ -518,12 +557,14 @@ export class ChaiShuMatrixView extends ItemView {
     this.matrixScrollEl.addEventListener("dragend", () => this.onDragEnd());
 
     // V2.0: pinch-to-zoom (mobile) — replaces the floating +/- buttons.
-    // V2.2: touchstart is non-passive too, so we can preventDefault() the
-    // two-finger gesture BEFORE the WebView claims native pinch-zoom.
+    // V2.3: touchstart is non-passive too, so preventDefault() claims the
+    // two-finger gesture BEFORE the WebView does (prevents Obsidian global zoom).
     this.matrixScrollEl.addEventListener("touchstart", (e) => this.onPinchStart(e), { passive: false });
     this.matrixScrollEl.addEventListener("touchmove", (e) => this.onPinchMove(e), { passive: false });
     this.matrixScrollEl.addEventListener("touchend", (e) => this.onPinchEnd(e));
     this.matrixScrollEl.addEventListener("touchcancel", (e) => this.onPinchEnd(e));
+    // V2.3: PC Ctrl/Cmd + mouse-wheel zoom.
+    this.matrixScrollEl.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
 
     this.setupObserver();
     this.renderMatrixRows();
@@ -1366,9 +1407,6 @@ export class ChaiShuMatrixView extends ItemView {
 
   private onPinchStart(e: TouchEvent): void {
     if (e.touches.length === 2) {
-      // Claim the two-finger gesture immediately so the WebView never turns it
-      // into its own page/global pinch-zoom (the #1 cause of "pinch does nothing").
-      e.preventDefault();
       this.pinchDist = this.touchDistance(e.touches);
       this.pinchZoom = this.zoom;
       this.touchScrolling = false;
@@ -1401,20 +1439,9 @@ export class ChaiShuMatrixView extends ItemView {
   }
 
   private onPinchEnd(e: TouchEvent): void {
-    if (e.touches.length < 2) {
-      if (this.pinchDist > 0) {
-        this.pinchDist = 0;
-        void this.plugin.saveSettings();
-      }
-      // A finger lifted off a pinch: re-arm single-finger scroll from the
-      // remaining finger's current position (so scroll works right after zoom).
-      if (e.touches.length === 1) {
-        this.touchStartX = e.touches[0].clientX;
-        this.touchStartY = e.touches[0].clientY;
-        this.touchScrollLeft = this.matrixScrollEl.scrollLeft;
-        this.touchScrollTop = this.matrixScrollEl.scrollTop;
-        this.touchScrolling = true;
-      }
+    if (e.touches.length < 2 && this.pinchDist > 0) {
+      this.pinchDist = 0;
+      void this.plugin.saveSettings();
     }
     if (e.touches.length === 0) {
       this.touchScrolling = false;
@@ -1425,6 +1452,21 @@ export class ChaiShuMatrixView extends ItemView {
     const dx = touches[0].clientX - touches[1].clientX;
     const dy = touches[0].clientY - touches[1].clientY;
     return Math.hypot(dx, dy);
+  }
+
+  /** V2.3: PC Ctrl/Cmd + mouse-wheel zoom (step 0.1, clamped). */
+  private onWheel(e: WheelEvent): void {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    const step = 0.1;
+    const delta = e.deltaY < 0 ? step : -step;
+    const z = Math.min(
+      ZOOM_MAX,
+      Math.max(ZOOM_MIN, Math.round((this.zoom + delta) * 10) / 10)
+    );
+    this.zoom = z;
+    this.applyZoom();
+    void this.plugin.saveSettings();
   }
 
   private deleteNode(nodeId: string): void {

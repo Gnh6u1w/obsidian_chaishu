@@ -1,6 +1,8 @@
 import { ItemView, Notice, WorkspaceLeaf, setIcon } from "obsidian";
 import type ChaiShuMatrixPlugin from "./main";
 import { BookData, VIEW_TYPE_CHAISHU_DASHBOARD } from "./types";
+import { StoragePathModal } from "./modals";
+import { recoverBooksFromFolder } from "./store";
 
 /** 项目大厅 (Dashboard): standalone tab opened by the ribbon icon / command.
  *  Lists all 拆书项目 with fuzzy search + category/tag filters (with badge counts). */
@@ -58,6 +60,12 @@ export class ChaiShuDashboardView extends ItemView {
       cls: "chs-btn chs-btn-primary",
     });
     newBtn.addEventListener("click", () => this.openCreateBook());
+
+    const recoverBtn = head.createEl("button", {
+      text: "📥 导入/恢复已有项目",
+      cls: "chs-btn",
+    });
+    recoverBtn.addEventListener("click", () => this.openRecover());
 
     const controls = contentEl.createDiv("chs-dash-controls");
     this.searchInput = controls.createEl("input", { type: "text" });
@@ -182,55 +190,112 @@ export class ChaiShuDashboardView extends ItemView {
   }
 
   private openCreateBook(): void {
-    // V2.3.1: inline creation panel (no centered modal) — unified entry.
+    // V2.3: inline create panel (no centered modal) — respects 统一入口.
     if (this.createFormEl) {
-      const input = this.createFormEl.querySelector("input") as HTMLInputElement | null;
-      input?.focus();
+      const nameInput = this.createFormEl.querySelector<HTMLInputElement>(
+        ".chs-dash-create-name"
+      );
+      nameInput?.focus();
       return;
     }
-    const form = this.contentEl.createDiv("chs-dash-create");
-    const titleRow = form.createDiv("chs-dash-create-title");
-    titleRow.setText("新建拆书项目");
+    const panel = this.contentEl.createDiv("chs-dash-create");
+    this.createFormEl = panel;
+    const head = panel.createDiv("chs-dash-create-title");
+    head.setText("新建拆书项目");
 
-    const nameInput = form.createEl("input", { type: "text" });
-    nameInput.addClass("chs-input");
+    const nameField = panel.createDiv("chs-dash-create-field");
+    nameField.createSpan("chs-field-label").setText("拆书名称");
+    const nameInput = nameField.createEl("input", {
+      type: "text",
+      cls: "chs-input chs-dash-create-name",
+    });
     nameInput.setAttribute("placeholder", "拆书名称（必填）");
 
-    const authorInput = form.createEl("input", { type: "text" });
-    authorInput.addClass("chs-input");
+    const authorField = panel.createDiv("chs-dash-create-field");
+    authorField.createSpan("chs-field-label").setText("作者");
+    const authorInput = authorField.createEl("input", {
+      type: "text",
+      cls: "chs-input",
+    });
     authorInput.setAttribute("placeholder", "作者（可选）");
 
-    const actions = form.createDiv("chs-dash-create-actions");
-    const okBtn = actions.createEl("button", {
+    const actions = panel.createDiv("chs-dash-create-actions");
+    const createBtn = actions.createEl("button", {
       text: "创建",
       cls: "chs-btn chs-btn-primary",
     });
-    const cancelBtn = actions.createEl("button", { text: "取消", cls: "chs-btn" });
+    const cancelBtn = actions.createEl("button", {
+      text: "取消",
+      cls: "chs-btn",
+    });
 
-    const close = () => {
-      form.remove();
+    const closePanel = () => {
+      this.createFormEl?.remove();
       this.createFormEl = null;
     };
 
-    okBtn.addEventListener("click", async () => {
+    createBtn.addEventListener("click", async () => {
       const title = nameInput.value.trim();
       if (!title) {
-        new Notice("请输入拆书名称");
+        new Notice("请填写拆书名称");
         return;
       }
       await this.plugin.createBook(title, authorInput.value.trim());
-      close();
+      closePanel();
+      this.render();
       await this.plugin.openMatrix();
     });
-    cancelBtn.addEventListener("click", close);
-
-    this.createFormEl = form;
-    const head = this.contentEl.querySelector(".chs-dash-head");
-    if (head?.nextSibling) {
-      this.contentEl.insertBefore(form, head.nextSibling);
-    } else {
-      this.contentEl.prepend(form);
-    }
+    cancelBtn.addEventListener("click", closePanel);
+    nameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        createBtn.click();
+      }
+    });
+    authorInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        createBtn.click();
+      }
+    });
     nameInput.focus();
+  }
+
+  /** V2.3: scan a folder of old notes (YAML 拆书项目/所属卷/章节名称…) and
+   *  rebuild the project JSON structures. */
+  private openRecover(): void {
+    new StoragePathModal(this.app, {
+      current: "",
+      title: "导入/恢复已有项目",
+      desc:
+        "选择一个包含旧拆书笔记的文件夹（笔记需带 YAML 属性：拆书项目/所属卷/章节名称/分析维度）。插件会扫描并自动重建项目。",
+      onSelect: async (path) => {
+        if (!path) {
+          new Notice("请选择文件夹");
+          return;
+        }
+        const recovered = await recoverBooksFromFolder(this.app.vault, path);
+        if (recovered.length === 0) {
+          new Notice("未在所选文件夹中找到可恢复的拆书笔记");
+          return;
+        }
+        const settings = this.settings;
+        let added = 0;
+        for (const b of recovered) {
+          if (settings.books.some((x) => x.bookInfo.title === b.bookInfo.title)) {
+            continue;
+          }
+          settings.books.push(b);
+          added++;
+        }
+        await this.plugin.saveSettings();
+        this.render();
+        new Notice(
+          added > 0
+            ? `已恢复 ${added} 个项目（共扫描到 ${recovered.length} 个）`
+            : `扫描到 ${recovered.length} 个项目，但都已存在`
+        );
+      },
+    }).open();
   }
 }

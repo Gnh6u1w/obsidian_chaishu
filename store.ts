@@ -1,6 +1,24 @@
-import { normalizePath, TFile, Vault } from "obsidian";
-import type { BookData, Dimension, NodeData, NodeType } from "./types";
-import { DEFAULT_Y_AXIS_LABELS, EMOTION_LEVELS } from "./types";
+import {
+  normalizePath,
+  parseYaml,
+  TAbstractFile,
+  TFile,
+  TFolder,
+  Vault,
+} from "obsidian";
+import type {
+  BookData,
+  CellData,
+  CharacterData,
+  Dimension,
+  NodeData,
+  NodeType,
+} from "./types";
+import {
+  DEFAULT_Y_AXIS_LABELS,
+  DIMENSION_COLORS,
+  EMOTION_LEVELS,
+} from "./types";
 
 /** Generate a collision-resistant id without Node/Electron APIs. */
 export function uid(prefix: string): string {
@@ -523,6 +541,8 @@ export function buildCharacterContent(
     "角色名称: " + yamlString(character?.name ?? "角色"),
     "人设维度: " + yamlString(dimension.name),
     "拆书项目: " + yamlString(bookFolderName(book.bookInfo.title)),
+    // V2.3: auto-tag so the note shows in Obsidian's native graph filtered by 人设/书名.
+    "tags: " + JSON.stringify(["人设", bookFolderName(book.bookInfo.title)]),
     "---",
     "",
   ];
@@ -609,4 +629,253 @@ export async function createSummaryDimNote(
     return existing;
   }
   return await vault.create(filePath, content);
+}
+
+// ------------------------------------------------------- note recovery (V2.3)
+// Rebuild BookData[] from a folder of already-existing notes by parsing their
+// YAML frontmatter (拆书项目/所属卷/所属单元/章节名称/分析维度 …). Tolerant of
+// missing/misspelled keys: falls back to English keys and strips 《》 brackets.
+
+function cleanRecoveredTitle(t: string): string {
+  return t.replace(/^《/, "").replace(/》$/, "").trim();
+}
+
+function extractRecoveredFrontmatter(
+  content: string
+): Record<string, unknown> | null {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return null;
+  try {
+    const parsed = parseYaml(m[1]);
+    return parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+interface RecoveredNote {
+  file: TFile;
+  book: string;
+  type: string;
+  volume: string;
+  unit: string;
+  chapter: string;
+  dimension: string;
+  character: string;
+  charDimension: string;
+}
+
+/** Scan a vault folder recursively and rebuild books from note YAML. */
+export async function recoverBooksFromFolder(
+  vault: Vault,
+  folderPath: string
+): Promise<BookData[]> {
+  const folder = vault.getAbstractFileByPath(normalizePath(folderPath));
+  if (!(folder instanceof TFolder)) return [];
+
+  const files: TFile[] = [];
+  const collect = (f: TAbstractFile): void => {
+    if (f instanceof TFolder) {
+      for (const c of f.children) collect(c);
+    } else if (f instanceof TFile && f.extension.toLowerCase() === "md") {
+      files.push(f);
+    }
+  };
+  collect(folder);
+
+  const notes: RecoveredNote[] = [];
+  for (const f of files) {
+    let content = "";
+    try {
+      content = await vault.cachedRead(f);
+    } catch {
+      continue;
+    }
+    const fm = extractRecoveredFrontmatter(content);
+    if (!fm) continue;
+    const str = (k: string): string => {
+      const v = fm[k];
+      return v == null ? "" : String(v).trim();
+    };
+    const book = cleanRecoveredTitle(
+      str("拆书项目") || str("book") || str("书名")
+    );
+    if (!book) continue;
+    notes.push({
+      file: f,
+      book,
+      type: str("类型") || str("type"),
+      volume: str("所属卷") || str("卷名") || str("volume"),
+      unit: str("所属单元") || str("单元名") || str("unit"),
+      chapter: str("章节名称") || str("chapter") || str("章节"),
+      dimension: str("分析维度") || str("dimension") || str("维度"),
+      character: str("角色名称") || str("character"),
+      charDimension: str("人设维度") || str("characterDimension"),
+    });
+  }
+
+  const byBook = new Map<string, RecoveredNote[]>();
+  for (const n of notes) {
+    const arr = byBook.get(n.book) || [];
+    arr.push(n);
+    byBook.set(n.book, arr);
+  }
+
+  const books: BookData[] = [];
+  for (const [title, ns] of byBook) {
+    const b = buildRecoveredBook(title, ns);
+    if (b) books.push(b);
+  }
+  return books;
+}
+
+function buildRecoveredBook(
+  title: string,
+  notes: RecoveredNote[]
+): BookData | null {
+  const chapterNotes = notes.filter((n) => n.chapter && n.dimension);
+  if (chapterNotes.length === 0) return null;
+
+  // Dimensions (unique, first-appearance order).
+  const dimIdByName = new Map<string, string>();
+  const dimensions: Dimension[] = [];
+  for (const n of chapterNotes) {
+    if (!dimIdByName.has(n.dimension)) {
+      const id = uid("d");
+      dimIdByName.set(n.dimension, id);
+      dimensions.push({
+        id,
+        name: n.dimension,
+        color: DIMENSION_COLORS[dimensions.length % DIMENSION_COLORS.length],
+        isChart: n.dimension === "情绪",
+        yAxisLabels: [...DEFAULT_Y_AXIS_LABELS],
+      });
+    }
+  }
+
+  // Structure: volumes → units → chapters (plus top-level chapters).
+  const structure: NodeData[] = [];
+  const volByName = new Map<string, NodeData>();
+  const unitByName = new Map<string, NodeData>(); // key = "volume|unit"
+  const chapterByKey = new Map<string, NodeData>();
+  const cells: Record<string, CellData> = {};
+
+  const getVolume = (name: string): NodeData => {
+    let v = volByName.get(name);
+    if (!v) {
+      v = createNode("volume", name);
+      volByName.set(name, v);
+      structure.push(v);
+    }
+    return v;
+  };
+  const getUnit = (name: string, volumeName: string): NodeData => {
+    const key = volumeName + "|" + name;
+    let u = unitByName.get(key);
+    if (!u) {
+      u = createNode("unit", name);
+      unitByName.set(key, u);
+      if (volumeName) getVolume(volumeName).children.push(u);
+      else structure.push(u);
+    }
+    return u;
+  };
+
+  for (const n of chapterNotes) {
+    const key = n.volume + "|" + n.unit + "|" + n.chapter;
+    let c = chapterByKey.get(key);
+    if (!c) {
+      c = createNode("chapter", n.chapter);
+      chapterByKey.set(key, c);
+      if (n.volume) {
+        const vol = getVolume(n.volume);
+        if (n.unit) getUnit(n.unit, n.volume).children.push(c);
+        else vol.children.push(c);
+      } else if (n.unit) {
+        getUnit(n.unit, "").children.push(c);
+      } else {
+        structure.push(c);
+      }
+    }
+    const dimId = dimIdByName.get(n.dimension);
+    if (dimId) {
+      cells[cellKey(c.id, dimId)] = {
+        filePath: n.file.path,
+        hasContent: true,
+      };
+    }
+  }
+
+  // Per-dimension summary notes.
+  for (const n of notes) {
+    if (n.type !== "卷总结" && n.type !== "单元总结") continue;
+    const dimId = n.dimension ? dimIdByName.get(n.dimension) : undefined;
+    if (!dimId) continue;
+    if (n.type === "卷总结" && n.volume) {
+      const v = volByName.get(n.volume);
+      if (v) v.summaryFiles[dimId] = n.file.path;
+    } else if (n.type === "单元总结" && n.unit) {
+      const u =
+        unitByName.get(n.volume + "|" + n.unit) || unitByName.get("|" + n.unit);
+      if (u) u.summaryFiles[dimId] = n.file.path;
+    }
+  }
+
+  // Character notes (人设拆解).
+  const characters: CharacterData[] = [];
+  const charByName = new Map<string, CharacterData>();
+  const charDimIdByName = new Map<string, string>();
+  const characterDimensions: Dimension[] = [];
+  const characterCells: Record<string, CellData> = {};
+
+  for (const n of notes) {
+    if (n.type !== "人设" || !n.character || !n.charDimension) continue;
+    let c = charByName.get(n.character);
+    if (!c) {
+      c = { id: uid("char"), name: n.character, factionId: "" };
+      charByName.set(n.character, c);
+      characters.push(c);
+    }
+    let dimId = charDimIdByName.get(n.charDimension);
+    if (!dimId) {
+      dimId = uid("d");
+      charDimIdByName.set(n.charDimension, dimId);
+      characterDimensions.push({
+        id: dimId,
+        name: n.charDimension,
+        color: DIMENSION_COLORS[characterDimensions.length % DIMENSION_COLORS.length],
+        isChart: false,
+        yAxisLabels: [],
+      });
+    }
+    characterCells[cellKey(c.id, dimId)] = {
+      filePath: n.file.path,
+      hasContent: true,
+    };
+  }
+
+  return {
+    id: uid("book"),
+    bookInfo: {
+      title,
+      author: "",
+      score: "",
+      category: [],
+      tags: [],
+      bgImage: "",
+      bgMode: "cover",
+      bgOverlay: 0.3,
+    },
+    storagePath: "",
+    dimensions,
+    structure,
+    cells,
+    characters,
+    characterDimensions,
+    characterCells,
+    factions: [],
+    relationships: [],
+  };
 }
