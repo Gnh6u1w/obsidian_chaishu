@@ -1723,49 +1723,48 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       this.scheduleSave();
     });
     const toggle = info.createEl("button", {
-      text: "\u25BE \u5C55\u5F00\u4FE1\u606F",
-      cls: "chs-btn chs-btn-sm chs-bookinfo-toggle"
+      text: "\u2630 \u5C55\u5F00\u4FE1\u606F\u4E0E\u64CD\u4F5C",
+      cls: "chs-btn chs-bookinfo-toggle"
     });
     toggle.setAttribute("type", "button");
     toggle.addEventListener("click", () => {
       const expanded = info.hasClass("chs-bookinfo-expanded");
       if (expanded) {
         info.removeClass("chs-bookinfo-expanded");
-        toggle.setText("\u25BE \u5C55\u5F00\u4FE1\u606F");
+        toggle.setText("\u2630 \u5C55\u5F00\u4FE1\u606F\u4E0E\u64CD\u4F5C");
       } else {
         info.addClass("chs-bookinfo-expanded");
-        toggle.setText("\u25B4 \u6536\u8D77\u4FE1\u606F");
+        toggle.setText("\u2715 \u6536\u8D77\u4FE1\u606F\u4E0E\u64CD\u4F5C");
       }
     });
-    this.makeField(info, "\u4F5C\u8005", book.bookInfo.author, (v) => {
+    const panel = info.createDiv("chs-bookinfo-panel");
+    this.makeField(panel, "\u4F5C\u8005", book.bookInfo.author, (v) => {
       book.bookInfo.author = v;
       this.scheduleSave();
-    }, "chs-bookinfo-secondary");
-    this.makeField(info, "\u6210\u7EE9", book.bookInfo.score, (v) => {
+    });
+    this.makeField(panel, "\u6210\u7EE9", book.bookInfo.score, (v) => {
       book.bookInfo.score = v;
       this.scheduleSave();
-    }, "chs-bookinfo-secondary");
+    });
     this.buildChipField(
-      info,
+      panel,
       "\u5206\u7C7B",
       () => book.bookInfo.category,
       (vals) => {
         book.bookInfo.category = vals;
         this.scheduleSave();
-      },
-      "chs-bookinfo-secondary"
+      }
     );
     this.buildChipField(
-      info,
+      panel,
       "\u6807\u7B7E",
       () => book.bookInfo.tags,
       (vals) => {
         book.bookInfo.tags = vals;
         this.scheduleSave();
-      },
-      "chs-bookinfo-secondary"
+      }
     );
-    const actions = info.createDiv("chs-bookinfo-actions");
+    const actions = panel.createDiv("chs-bookinfo-actions");
     const charBtn = actions.createEl("button", { text: "\u{1F3AD} \u4EBA\u8BBE\u62C6\u89E3", cls: "chs-btn" });
     charBtn.addEventListener("click", () => void this.plugin.openCharacterView(book.id));
     const searchBtn = actions.createEl("button", { text: "\u{1F50D} \u5168\u5C40\u67E5\u8BE2", cls: "chs-btn" });
@@ -3137,6 +3136,22 @@ function relColor(type) {
   for (let i = 0; i < type.length; i++) h = h * 31 + type.charCodeAt(i) >>> 0;
   return `hsl(${h % 360}, 62%, 52%)`;
 }
+var REL_KEYWORDS = [
+  { type: "\u4EC7\u4EBA", words: ["\u6DF1\u4EC7", "\u6B7B\u5BF9\u5934", "\u7ED3\u6028", "\u7ED3\u4EC7", "\u4EC7\u4EBA", "\u654C\u5BF9", "\u5BBF\u654C", "\u4EC7", "\u6068", "\u654C"] },
+  { type: "\u604B\u4EBA", words: ["\u604B\u4EBA", "\u60C5\u4FA3", "\u76F8\u604B", "\u7231\u6155", "\u559C\u6B22", "\u7231"] },
+  { type: "\u76DF\u53CB", words: ["\u76DF\u53CB", "\u540C\u76DF", "\u7ED3\u76DF", "\u4F19\u4F34", "\u631A\u53CB", "\u670B\u53CB", "\u53CB"] },
+  { type: "\u5E08\u5F92", words: ["\u5E08\u5F92", "\u5E08\u7236", "\u5F92\u5F1F", "\u62DC\u5E08", "\u5E08"] },
+  { type: "\u4EB2\u60C5", words: ["\u4EB2\u60C5", "\u5BB6\u4EBA", "\u5144\u5F1F", "\u59D0\u59B9", "\u7236\u5B50", "\u6BCD\u5973", "\u4EB2"] }
+];
+function detectRelationType(body) {
+  const t = body.toLowerCase();
+  for (const group of REL_KEYWORDS) {
+    for (const w of group.words) {
+      if (t.includes(w)) return group.type;
+    }
+  }
+  return "\u5173\u8054";
+}
 var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -3157,6 +3172,8 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     this.graphLinkFrom = null;
     this.graphPointers = /* @__PURE__ */ new Map();
     this.graphPinchDist = 0;
+    // V2.4: bidirectional feedback — character id → related characters (id + type).
+    this.relatedMap = /* @__PURE__ */ new Map();
     this.plugin = plugin;
   }
   getViewType() {
@@ -3205,18 +3222,17 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     const back = row.createEl("button", { text: "\u2190 \u8FD4\u56DE\u62C6\u4E66\u9879\u76EE", cls: "chs-btn" });
     back.addEventListener("click", () => void this.returnToMatrix());
     row.createSpan("chs-char-title").setText("\u4EBA\u8BBE\u62C6\u89E3 \xB7 " + book.bookInfo.title);
-    const nativeGraph = row.createEl("button", {
-      text: "\u{1F578}\uFE0F \u6253\u5F00\u5173\u7CFB\u56FE\u8C31",
-      cls: "chs-btn",
-      title: "\u5728 Obsidian \u539F\u751F\u5173\u7CFB\u56FE\u8C31\u4E2D\u67E5\u770B\u89D2\u8272\u5173\u7CFB"
+    const seg = row.createDiv("chs-seg");
+    const tableBtn = seg.createEl("button", {
+      text: "\u8868\u683C\u89C6\u56FE",
+      cls: "chs-btn chs-btn-sm" + (this.viewMode === "table" ? " chs-btn-primary" : "")
     });
-    nativeGraph.addEventListener("click", () => {
-      void (async () => {
-        const leaf = this.app.workspace.getLeaf("tab");
-        await leaf.setViewState({ type: "graph", active: true });
-        this.app.workspace.revealLeaf(leaf);
-      })();
+    tableBtn.addEventListener("click", () => this.setViewMode("table"));
+    const graphBtn = seg.createEl("button", {
+      text: "\u5173\u7CFB\u56FE\u8C31",
+      cls: "chs-btn chs-btn-sm" + (this.viewMode === "graph" ? " chs-btn-primary" : "")
     });
+    graphBtn.addEventListener("click", () => this.setViewMode("graph"));
     const toolbar = contentEl.createDiv("chs-toolbar");
     const left = toolbar.createDiv("chs-toolbar-left");
     const addChar = left.createEl("button", { text: "\uFF0B \u6DFB\u52A0\u89D2\u8272", cls: "chs-btn chs-btn-primary" });
@@ -3230,7 +3246,7 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
       (book.characters.length || 0) + " \u4E2A\u89D2\u8272 \xB7 " + (book.factions.length || 0) + " \u4E2A\u9635\u8425 \xB7 " + (book.characterDimensions.length || 0) + " \u4E2A\u4EBA\u8BBE\u7EF4\u5EA6"
     );
     if (this.viewMode === "graph") {
-      this.buildGraphView(book);
+      void this.buildGraphView(book);
     } else {
       this.buildMatrix(book);
     }
@@ -3240,7 +3256,48 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     this.render();
   }
   // ================================================================ table
+  /** Sync (metadataCache-only) related-character map for the table view.
+   *  Combines explicit `book.relationships` + implicit wikilinks from character
+   *  notes (no body reads — fast enough to run on every table render). */
+  computeRelatedSync(book) {
+    var _a, _b, _c, _d;
+    this.relatedMap = /* @__PURE__ */ new Map();
+    const add = (a, b, type) => {
+      var _a2, _b2;
+      if (!a || !b || a === b) return;
+      const arrA = (_a2 = this.relatedMap.get(a)) != null ? _a2 : [];
+      if (!arrA.some((x) => x.id === b)) arrA.push({ id: b, type });
+      this.relatedMap.set(a, arrA);
+      const arrB = (_b2 = this.relatedMap.get(b)) != null ? _b2 : [];
+      if (!arrB.some((x) => x.id === a)) arrB.push({ id: a, type });
+      this.relatedMap.set(b, arrB);
+    };
+    for (const r of (_a = book.relationships) != null ? _a : []) add(r.from, r.to, r.type);
+    const byName = /* @__PURE__ */ new Map();
+    for (const c of book.characters) byName.set(c.name, c);
+    const matchTarget = (base) => {
+      const exact = byName.get(base);
+      if (exact) return exact;
+      for (const c of book.characters) if (base.startsWith(c.name + "-")) return c;
+      return null;
+    };
+    for (const char of book.characters) {
+      for (const dim of book.characterDimensions) {
+        const cell = book.characterCells[cellKey(char.id, dim.id)];
+        if (!(cell == null ? void 0 : cell.filePath)) continue;
+        const f = this.app.vault.getAbstractFileByPath(cell.filePath);
+        if (!(f instanceof import_obsidian4.TFile)) continue;
+        const links = (_c = (_b = this.app.metadataCache.getFileCache(f)) == null ? void 0 : _b.links) != null ? _c : [];
+        for (const l of links) {
+          const base = (_d = (l.link || "").split("/").pop()) != null ? _d : "";
+          const target = matchTarget(base);
+          if (target) add(char.id, target.id, "\u5173\u8054");
+        }
+      }
+    }
+  }
   buildMatrix(book) {
+    this.computeRelatedSync(book);
     const scroll = this.contentEl.createDiv("chs-matrix-scroll");
     const table = scroll.createEl("table");
     table.addClass("chs-matrix", "chs-character-matrix");
@@ -3323,6 +3380,7 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     });
   }
   renderCharacterRow(tbody, book, character) {
+    var _a;
     const tr = tbody.createEl("tr");
     const nodeTd = tr.createEl("td", { cls: "chs-node" });
     nodeTd.draggable = true;
@@ -3330,6 +3388,15 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     const icon = nodeTd.createSpan("chs-node-icon");
     (0, import_obsidian4.setIcon)(icon, "user");
     nodeTd.createSpan("chs-node-name").setText(character.name);
+    const related = (_a = this.relatedMap.get(character.id)) != null ? _a : [];
+    if (related.length > 0) {
+      const label = related.map((r) => {
+        var _a2;
+        const c = book.characters.find((cc) => cc.id === r.id);
+        return ((_a2 = c == null ? void 0 : c.name) != null ? _a2 : "?") + "\xB7" + r.type;
+      }).join("\u3000");
+      nodeTd.createSpan("chs-node-related").setText("\u5173\u8054\uFF1A" + label);
+    }
     for (const dim of book.characterDimensions) {
       const td = tr.createEl("td", { cls: "chs-cell chs-character-cell" });
       td.style.setProperty("--chs-color", dim.color);
@@ -3759,7 +3826,7 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     }).open();
   }
   // ================================================================ graph
-  buildGraphView(book) {
+  async buildGraphView(book) {
     const wrap = this.contentEl.createDiv("chs-graph-wrap");
     const controls = wrap.createDiv("chs-graph-controls");
     controls.createSpan("chs-graph-hint").setText("\u62D6\u62FD\u8282\u70B9\u79FB\u52A8 \xB7 \u6EDA\u8F6E/\u53CC\u6307\u7F29\u653E \xB7 \u62D6\u62FD\u4E24\u8282\u70B9\u8FDE\u7EBF\u5EFA\u5173\u7CFB \xB7 \u70B9\u51FB\u8282\u70B9\u805A\u7126");
@@ -3784,7 +3851,7 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     canvas.addClass("chs-graph-canvas");
     this.graphCanvas = canvas;
     this.graphCtx = canvas.getContext("2d");
-    this.computeGraph(book);
+    await this.computeGraph(book);
     this.initGraphPositions(book);
     canvas.addEventListener("pointerdown", (e) => this.onGraphPointerDown(e));
     canvas.addEventListener("pointermove", (e) => this.onGraphPointerMove(e));
@@ -3810,16 +3877,24 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     this.graphCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   /** Build the edge list: explicit (manual) + implicit (Obsidian wikilinks). */
-  computeGraph(book) {
-    var _a, _b, _c, _d;
+  async computeGraph(book) {
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     const edges = [];
-    const seen = /* @__PURE__ */ new Set();
+    const pairMap = /* @__PURE__ */ new Map();
     const addEdge = (from, to, type, explicit) => {
       if (!from || !to || from === to) return;
-      const key = [from, to].sort().join("|") + "|" + (explicit ? "e" : "i");
-      if (seen.has(key)) return;
-      seen.add(key);
-      edges.push({ from, to, type, explicit });
+      const pairKey = [from, to].sort().join("|");
+      const existing = pairMap.get(pairKey);
+      if (existing) {
+        if (explicit && !existing.explicit) {
+          existing.type = type;
+          existing.explicit = true;
+        }
+        return;
+      }
+      const e = { from, to, type, explicit };
+      pairMap.set(pairKey, e);
+      edges.push(e);
     };
     for (const r of (_a = book.relationships) != null ? _a : []) {
       addEdge(r.from, r.to, r.type, true);
@@ -3846,6 +3921,32 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
           const base = (_d = (l.link || "").split("/").pop()) != null ? _d : "";
           const target = matchTarget(base);
           if (target) addEdge(char.id, target.id, "\u5173\u8054", false);
+        }
+      }
+    }
+    for (const cell of Object.values((_e = book.cells) != null ? _e : {})) {
+      if (!(cell == null ? void 0 : cell.filePath)) continue;
+      const f = this.app.vault.getAbstractFileByPath(cell.filePath);
+      if (!(f instanceof import_obsidian4.TFile)) continue;
+      const links = (_g = (_f = this.app.metadataCache.getFileCache(f)) == null ? void 0 : _f.links) != null ? _g : [];
+      const matched = [];
+      for (const l of links) {
+        const base = (_h = (l.link || "").split("/").pop()) != null ? _h : "";
+        const target = matchTarget(base);
+        if (target && !matched.includes(target.id)) matched.push(target.id);
+      }
+      const body = await this.app.vault.cachedRead(f);
+      for (const c of characters) {
+        if (c.name.length >= 2 && body.includes(c.name) && !matched.includes(c.id)) {
+          matched.push(c.id);
+        }
+      }
+      if (matched.length >= 2) {
+        const type = detectRelationType(body);
+        for (let i = 0; i < matched.length; i++) {
+          for (let j = i + 1; j < matched.length; j++) {
+            addEdge(matched[i], matched[j], type, false);
+          }
         }
       }
     }

@@ -347,56 +347,55 @@ export class ChaiShuMatrixView extends ItemView {
       this.scheduleSave();
     });
 
-    // V2.3: mobile collapse panel — 作者/成绩/分类/标签 are "secondary" and
-    // collapse behind an 展开信息 toggle on small screens (always visible on PC).
+    // V2.4: mobile collapse panel — 作者/成绩/分类/标签 + 操作按钮 all live in a
+    // single expandable panel behind a prominent toggle (never silently hidden).
     const toggle = info.createEl("button", {
-      text: "▾ 展开信息",
-      cls: "chs-btn chs-btn-sm chs-bookinfo-toggle",
+      text: "☰ 展开信息与操作",
+      cls: "chs-btn chs-bookinfo-toggle",
     });
     toggle.setAttribute("type", "button");
     toggle.addEventListener("click", () => {
       const expanded = info.hasClass("chs-bookinfo-expanded");
       if (expanded) {
         info.removeClass("chs-bookinfo-expanded");
-        toggle.setText("▾ 展开信息");
+        toggle.setText("☰ 展开信息与操作");
       } else {
         info.addClass("chs-bookinfo-expanded");
-        toggle.setText("▴ 收起信息");
+        toggle.setText("✕ 收起信息与操作");
       }
     });
 
-    this.makeField(info, "作者", book.bookInfo.author, (v) => {
+    const panel = info.createDiv("chs-bookinfo-panel");
+    this.makeField(panel, "作者", book.bookInfo.author, (v) => {
       book.bookInfo.author = v;
       this.scheduleSave();
-    }, "chs-bookinfo-secondary");
-    this.makeField(info, "成绩", book.bookInfo.score, (v) => {
+    });
+    this.makeField(panel, "成绩", book.bookInfo.score, (v) => {
       book.bookInfo.score = v;
       this.scheduleSave();
-    }, "chs-bookinfo-secondary");
+    });
 
     // V2.1: 分类 (multi, custom) + 标签 (multi, free input).
     this.buildChipField(
-      info,
+      panel,
       "分类",
       () => book.bookInfo.category,
       (vals) => {
         book.bookInfo.category = vals;
         this.scheduleSave();
-      },
-      "chs-bookinfo-secondary"
+      }
     );
     this.buildChipField(
-      info,
+      panel,
       "标签",
       () => book.bookInfo.tags,
       (vals) => {
         book.bookInfo.tags = vals;
         this.scheduleSave();
-      },
-      "chs-bookinfo-secondary"
+      }
     );
 
-    const actions = info.createDiv("chs-bookinfo-actions");
+    const actions = panel.createDiv("chs-bookinfo-actions");
     const charBtn = actions.createEl("button", { text: "🎭 人设拆解", cls: "chs-btn" });
     charBtn.addEventListener("click", () => void this.plugin.openCharacterView(book.id));
     const searchBtn = actions.createEl("button", { text: "🔍 全局查询", cls: "chs-btn" });

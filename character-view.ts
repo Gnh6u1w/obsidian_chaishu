@@ -44,6 +44,26 @@ function relColor(type: string): string {
   return `hsl(${h % 360}, 62%, 52%)`;
 }
 
+// V2.4: relationship-type keywords (matched against 拆书 chapter-note text).
+// Order matters — more specific phrases are checked before single characters.
+const REL_KEYWORDS: Array<{ type: string; words: string[] }> = [
+  { type: "仇人", words: ["深仇", "死对头", "结怨", "结仇", "仇人", "敌对", "宿敌", "仇", "恨", "敌"] },
+  { type: "恋人", words: ["恋人", "情侣", "相恋", "爱慕", "喜欢", "爱"] },
+  { type: "盟友", words: ["盟友", "同盟", "结盟", "伙伴", "挚友", "朋友", "友"] },
+  { type: "师徒", words: ["师徒", "师父", "徒弟", "拜师", "师"] },
+  { type: "亲情", words: ["亲情", "家人", "兄弟", "姐妹", "父子", "母女", "亲"] },
+];
+
+function detectRelationType(body: string): string {
+  const t = body.toLowerCase();
+  for (const group of REL_KEYWORDS) {
+    for (const w of group.words) {
+      if (t.includes(w)) return group.type;
+    }
+  }
+  return "关联";
+}
+
 interface GEdge {
   from: string;
   to: string;
@@ -77,6 +97,9 @@ export class ChaiShuCharacterView extends ItemView {
   private graphLinkFrom: string | null = null;
   private graphPointers = new Map<number, { x: number; y: number }>();
   private graphPinchDist = 0;
+
+  // V2.4: bidirectional feedback — character id → related characters (id + type).
+  private relatedMap = new Map<string, Array<{ id: string; type: string }>>();
 
   constructor(leaf: WorkspaceLeaf, plugin: ChaiShuMatrixPlugin) {
     super(leaf);
@@ -137,21 +160,19 @@ export class ChaiShuCharacterView extends ItemView {
     const back = row.createEl("button", { text: "← 返回拆书项目", cls: "chs-btn" });
     back.addEventListener("click", () => void this.returnToMatrix());
     row.createSpan("chs-char-title").setText("人设拆解 · " + book.bookInfo.title);
-    // V2.3: reuse Obsidian's native relationship graph (character notes are auto-tagged).
-    const nativeGraph = row.createEl("button", {
-      text: "🕸️ 打开关系图谱",
-      cls: "chs-btn",
-      title: "在 Obsidian 原生关系图谱中查看角色关系",
+
+    // V2.4: in-plugin relationship graph (table ↔ graph view switch).
+    const seg = row.createDiv("chs-seg");
+    const tableBtn = seg.createEl("button", {
+      text: "表格视图",
+      cls: "chs-btn chs-btn-sm" + (this.viewMode === "table" ? " chs-btn-primary" : ""),
     });
-    nativeGraph.addEventListener("click", () => {
-      // Open Obsidian's native global graph view (character notes carry
-      // `tags: [人设, 《书名》]` so they cluster + filter there).
-      void (async () => {
-        const leaf = this.app.workspace.getLeaf("tab");
-        await leaf.setViewState({ type: "graph", active: true });
-        this.app.workspace.revealLeaf(leaf);
-      })();
+    tableBtn.addEventListener("click", () => this.setViewMode("table"));
+    const graphBtn = seg.createEl("button", {
+      text: "关系图谱",
+      cls: "chs-btn chs-btn-sm" + (this.viewMode === "graph" ? " chs-btn-primary" : ""),
     });
+    graphBtn.addEventListener("click", () => this.setViewMode("graph"));
 
     const toolbar = contentEl.createDiv("chs-toolbar");
     const left = toolbar.createDiv("chs-toolbar-left");
@@ -174,7 +195,7 @@ export class ChaiShuCharacterView extends ItemView {
     );
 
     if (this.viewMode === "graph") {
-      this.buildGraphView(book);
+      void this.buildGraphView(book);
     } else {
       this.buildMatrix(book);
     }
@@ -187,7 +208,47 @@ export class ChaiShuCharacterView extends ItemView {
 
   // ================================================================ table
 
+  /** Sync (metadataCache-only) related-character map for the table view.
+   *  Combines explicit `book.relationships` + implicit wikilinks from character
+   *  notes (no body reads — fast enough to run on every table render). */
+  private computeRelatedSync(book: BookData): void {
+    this.relatedMap = new Map();
+    const add = (a: string, b: string, type: string) => {
+      if (!a || !b || a === b) return;
+      const arrA = this.relatedMap.get(a) ?? [];
+      if (!arrA.some((x) => x.id === b)) arrA.push({ id: b, type });
+      this.relatedMap.set(a, arrA);
+      const arrB = this.relatedMap.get(b) ?? [];
+      if (!arrB.some((x) => x.id === a)) arrB.push({ id: a, type });
+      this.relatedMap.set(b, arrB);
+    };
+    for (const r of book.relationships ?? []) add(r.from, r.to, r.type);
+    const byName = new Map<string, CharacterData>();
+    for (const c of book.characters) byName.set(c.name, c);
+    const matchTarget = (base: string): CharacterData | null => {
+      const exact = byName.get(base);
+      if (exact) return exact;
+      for (const c of book.characters) if (base.startsWith(c.name + "-")) return c;
+      return null;
+    };
+    for (const char of book.characters) {
+      for (const dim of book.characterDimensions) {
+        const cell = book.characterCells[cellKey(char.id, dim.id)];
+        if (!cell?.filePath) continue;
+        const f = this.app.vault.getAbstractFileByPath(cell.filePath);
+        if (!(f instanceof TFile)) continue;
+        const links = this.app.metadataCache.getFileCache(f)?.links ?? [];
+        for (const l of links) {
+          const base = (l.link || "").split("/").pop() ?? "";
+          const target = matchTarget(base);
+          if (target) add(char.id, target.id, "关联");
+        }
+      }
+    }
+  }
+
   private buildMatrix(book: BookData): void {
+    this.computeRelatedSync(book);
     const scroll = this.contentEl.createDiv("chs-matrix-scroll");
     const table = scroll.createEl("table");
     table.addClass("chs-matrix", "chs-character-matrix");
@@ -293,6 +354,18 @@ export class ChaiShuCharacterView extends ItemView {
     const icon = nodeTd.createSpan("chs-node-icon");
     setIcon(icon, "user");
     nodeTd.createSpan("chs-node-name").setText(character.name);
+
+    // V2.4: bidirectional feedback — list related characters (from the graph).
+    const related = this.relatedMap.get(character.id) ?? [];
+    if (related.length > 0) {
+      const label = related
+        .map((r) => {
+          const c = book.characters.find((cc) => cc.id === r.id);
+          return (c?.name ?? "?") + "·" + r.type;
+        })
+        .join("　");
+      nodeTd.createSpan("chs-node-related").setText("关联：" + label);
+    }
 
     for (const dim of book.characterDimensions) {
       const td = tr.createEl("td", { cls: "chs-cell chs-character-cell" });
@@ -754,7 +827,7 @@ export class ChaiShuCharacterView extends ItemView {
 
   // ================================================================ graph
 
-  private buildGraphView(book: BookData): void {
+  private async buildGraphView(book: BookData): Promise<void> {
     const wrap = this.contentEl.createDiv("chs-graph-wrap");
 
     const controls = wrap.createDiv("chs-graph-controls");
@@ -782,7 +855,7 @@ export class ChaiShuCharacterView extends ItemView {
     this.graphCanvas = canvas;
     this.graphCtx = canvas.getContext("2d") as CanvasRenderingContext2D;
 
-    this.computeGraph(book);
+    await this.computeGraph(book);
     this.initGraphPositions(book);
 
     // Interaction via Pointer Events (unified mouse + touch).
@@ -812,16 +885,25 @@ export class ChaiShuCharacterView extends ItemView {
   }
 
   /** Build the edge list: explicit (manual) + implicit (Obsidian wikilinks). */
-  private computeGraph(book: BookData): void {
+  private async computeGraph(book: BookData): Promise<void> {
     const edges: GEdge[] = [];
-    const seen = new Set<string>();
+    const pairMap = new Map<string, GEdge>();
 
     const addEdge = (from: string, to: string, type: string, explicit: boolean) => {
       if (!from || !to || from === to) return;
-      const key = [from, to].sort().join("|") + "|" + (explicit ? "e" : "i");
-      if (seen.has(key)) return;
-      seen.add(key);
-      edges.push({ from, to, type, explicit });
+      const pairKey = [from, to].sort().join("|");
+      const existing = pairMap.get(pairKey);
+      if (existing) {
+        // explicit (manual) overrides implicit; keep the more specific type.
+        if (explicit && !existing.explicit) {
+          existing.type = type;
+          existing.explicit = true;
+        }
+        return;
+      }
+      const e: GEdge = { from, to, type, explicit };
+      pairMap.set(pairKey, e);
+      edges.push(e);
     };
 
     // 1) explicit relationships (manual).
@@ -853,6 +935,40 @@ export class ChaiShuCharacterView extends ItemView {
           const base = (l.link || "").split("/").pop() ?? "";
           const target = matchTarget(base);
           if (target) addEdge(char.id, target.id, "关联", false);
+        }
+      }
+    }
+
+    // 3) V2.4: implicit relationships from 拆书 chapter/dimension notes —
+    //    co-occurrence of character mentions (wikilinks OR bare names) in the
+    //    same note, with keyword-based type detection (仇人/恋人/盟友/…).
+    for (const cell of Object.values(book.cells ?? {})) {
+      if (!cell?.filePath) continue;
+      const f = this.app.vault.getAbstractFileByPath(cell.filePath);
+      if (!(f instanceof TFile)) continue;
+      const links = this.app.metadataCache.getFileCache(f)?.links ?? [];
+      const matched: string[] = [];
+      for (const l of links) {
+        const base = (l.link || "").split("/").pop() ?? "";
+        const target = matchTarget(base);
+        if (target && !matched.includes(target.id)) matched.push(target.id);
+      }
+
+      const body = await this.app.vault.cachedRead(f);
+
+      // bare-name mention fallback (for notes without [[wikilinks]]).
+      for (const c of characters) {
+        if (c.name.length >= 2 && body.includes(c.name) && !matched.includes(c.id)) {
+          matched.push(c.id);
+        }
+      }
+
+      if (matched.length >= 2) {
+        const type = detectRelationType(body);
+        for (let i = 0; i < matched.length; i++) {
+          for (let j = i + 1; j < matched.length; j++) {
+            addEdge(matched[i], matched[j], type, false);
+          }
         }
       }
     }

@@ -116,9 +116,29 @@
   padding-bottom: 2px;
 }
 
-/* V2.3: 展开/收起信息 toggle — hidden on desktop, shown only on mobile. */
+/* V2.3/V2.4: 展开/收起信息 toggle — hidden on desktop, shown only on mobile. */
 .chs-bookinfo-toggle {
   display: none;
+}
+
+/* V2.4: collapsible panel holding 作者/成绩/分类/标签 + 操作按钮. */
+.chs-bookinfo-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+}
+
+.chs-bookinfo-panel .chs-field,
+.chs-bookinfo-panel .chs-field-chips {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.chs-bookinfo-panel .chs-bookinfo-actions {
+  width: 100%;
+  flex-wrap: wrap;
 }
 
 /* --------------------------------------------------------------- inputs */
@@ -578,6 +598,21 @@ tr.chs-drop-root {
   text-overflow: ellipsis;
 }
 
+/* V2.4: related-character feedback line under the character name. */
+.chs-node-related {
+  display: block;
+  margin-top: 3px;
+  font-size: calc(11px * var(--chs-zoom, 1));
+  color: var(--text-muted);
+  line-height: 1.4;
+  word-break: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  text-overflow: ellipsis;
+}
+
 .chs-node-summary-btn {
   margin-left: 6px;
   height: 24px;
@@ -1006,15 +1041,25 @@ tr.chs-drop-root {
 
   .chs-bookinfo-toggle {
     display: inline-flex;
-    align-self: flex-start;
+    align-self: stretch;
+    width: 100%;
+    justify-content: center;
   }
 
-  .chs-bookinfo .chs-bookinfo-secondary {
+  .chs-bookinfo-panel {
     display: none;
   }
 
-  .chs-bookinfo.chs-bookinfo-expanded .chs-bookinfo-secondary {
+  .chs-bookinfo.chs-bookinfo-expanded .chs-bookinfo-panel {
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .chs-bookinfo-panel .chs-field,
+  .chs-bookinfo-panel .chs-field-chips {
+    flex: 1 1 auto;
+    width: 100%;
   }
 
   .chs-bookinfo-actions {
