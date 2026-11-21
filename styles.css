@@ -1044,16 +1044,18 @@ tr.chs-drop-root {
     align-self: stretch;
     width: 100%;
     justify-content: center;
+    gap: 4px;
   }
 
+  /* V2.5: fields VISIBLE by default (no display:none on load); collapse is opt-in. */
   .chs-bookinfo-panel {
-    display: none;
-  }
-
-  .chs-bookinfo.chs-bookinfo-expanded .chs-bookinfo-panel {
     display: flex;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .chs-bookinfo.chs-bookinfo-collapsed .chs-bookinfo-panel {
+    display: none;
   }
 
   .chs-bookinfo-panel .chs-field,

@@ -347,22 +347,25 @@ export class ChaiShuMatrixView extends ItemView {
       this.scheduleSave();
     });
 
-    // V2.4: mobile collapse panel — 作者/成绩/分类/标签 + 操作按钮 all live in a
-    // single expandable panel behind a prominent toggle (never silently hidden).
-    const toggle = info.createEl("button", {
-      text: "☰ 展开信息与操作",
-      cls: "chs-btn chs-bookinfo-toggle",
-    });
+    // V2.5: mobile header — 作者/成绩/分类/标签 + 操作按钮 are VISIBLE by default
+    // (red line: no feature may be silently display:none'd on load). A full-width
+    // toggle lets the user COLLAPSE them for more space.
+    const toggle = info.createEl("button", { cls: "chs-btn chs-bookinfo-toggle" });
     toggle.setAttribute("type", "button");
+    const updateToggleLabel = () => {
+      toggle.setText(
+        info.hasClass("chs-bookinfo-collapsed")
+          ? "▸ 展开信息与操作（作者/成绩/分类/标签/人设/查询）"
+          : "▾ 收起信息与操作"
+      );
+    };
+    updateToggleLabel();
     toggle.addEventListener("click", () => {
-      const expanded = info.hasClass("chs-bookinfo-expanded");
-      if (expanded) {
-        info.removeClass("chs-bookinfo-expanded");
-        toggle.setText("☰ 展开信息与操作");
-      } else {
-        info.addClass("chs-bookinfo-expanded");
-        toggle.setText("✕ 收起信息与操作");
-      }
+      info.toggleClass(
+        "chs-bookinfo-collapsed",
+        !info.hasClass("chs-bookinfo-collapsed")
+      );
+      updateToggleLabel();
     });
 
     const panel = info.createDiv("chs-bookinfo-panel");

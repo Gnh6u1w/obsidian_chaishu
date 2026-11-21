@@ -1722,20 +1722,20 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       this.syncSelectText();
       this.scheduleSave();
     });
-    const toggle = info.createEl("button", {
-      text: "\u2630 \u5C55\u5F00\u4FE1\u606F\u4E0E\u64CD\u4F5C",
-      cls: "chs-btn chs-bookinfo-toggle"
-    });
+    const toggle = info.createEl("button", { cls: "chs-btn chs-bookinfo-toggle" });
     toggle.setAttribute("type", "button");
+    const updateToggleLabel = () => {
+      toggle.setText(
+        info.hasClass("chs-bookinfo-collapsed") ? "\u25B8 \u5C55\u5F00\u4FE1\u606F\u4E0E\u64CD\u4F5C\uFF08\u4F5C\u8005/\u6210\u7EE9/\u5206\u7C7B/\u6807\u7B7E/\u4EBA\u8BBE/\u67E5\u8BE2\uFF09" : "\u25BE \u6536\u8D77\u4FE1\u606F\u4E0E\u64CD\u4F5C"
+      );
+    };
+    updateToggleLabel();
     toggle.addEventListener("click", () => {
-      const expanded = info.hasClass("chs-bookinfo-expanded");
-      if (expanded) {
-        info.removeClass("chs-bookinfo-expanded");
-        toggle.setText("\u2630 \u5C55\u5F00\u4FE1\u606F\u4E0E\u64CD\u4F5C");
-      } else {
-        info.addClass("chs-bookinfo-expanded");
-        toggle.setText("\u2715 \u6536\u8D77\u4FE1\u606F\u4E0E\u64CD\u4F5C");
-      }
+      info.toggleClass(
+        "chs-bookinfo-collapsed",
+        !info.hasClass("chs-bookinfo-collapsed")
+      );
+      updateToggleLabel();
     });
     const panel = info.createDiv("chs-bookinfo-panel");
     this.makeField(panel, "\u4F5C\u8005", book.bookInfo.author, (v) => {
