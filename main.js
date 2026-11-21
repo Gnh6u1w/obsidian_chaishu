@@ -768,6 +768,34 @@ var PromptModal = class extends import_obsidian2.Modal {
     this.contentEl.empty();
   }
 };
+var CharacterInfoModal = class extends import_obsidian2.Modal {
+  constructor(app, opts) {
+    super(app);
+    this.opts = opts;
+  }
+  onOpen() {
+    this.contentEl.addClass("chs-modal", "chs-char-info");
+    this.contentEl.createEl("h2", { text: this.opts.name });
+    const factionRow = this.contentEl.createDiv("chs-char-info-row");
+    factionRow.createSpan("chs-char-info-label").setText("\u9635\u8425");
+    const dot = factionRow.createSpan("chs-char-info-dot");
+    dot.style.backgroundColor = this.opts.factionColor;
+    factionRow.createSpan("chs-char-info-value").setText(this.opts.factionName);
+    this.contentEl.createDiv("chs-char-info-sub").setText("\u5173\u8054\u89D2\u8272");
+    if (this.opts.related.length === 0) {
+      this.contentEl.createDiv("chs-char-info-empty").setText("\u6682\u65E0\u5173\u8054");
+    } else {
+      for (const r of this.opts.related) {
+        const row = this.contentEl.createDiv("chs-char-info-rel");
+        row.createSpan("chs-char-info-rel-name").setText(r.name);
+        row.createSpan("chs-char-info-rel-type").setText(r.type);
+      }
+    }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 var BookCreateModal = class extends import_obsidian2.Modal {
   constructor(app, onSubmit) {
     super(app);
@@ -1722,32 +1750,16 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       this.syncSelectText();
       this.scheduleSave();
     });
-    const toggle = info.createEl("button", { cls: "chs-btn chs-bookinfo-toggle" });
-    toggle.setAttribute("type", "button");
-    const updateToggleLabel = () => {
-      toggle.setText(
-        info.hasClass("chs-bookinfo-collapsed") ? "\u25B8 \u5C55\u5F00\u4FE1\u606F\u4E0E\u64CD\u4F5C\uFF08\u4F5C\u8005/\u6210\u7EE9/\u5206\u7C7B/\u6807\u7B7E/\u4EBA\u8BBE/\u67E5\u8BE2\uFF09" : "\u25BE \u6536\u8D77\u4FE1\u606F\u4E0E\u64CD\u4F5C"
-      );
-    };
-    updateToggleLabel();
-    toggle.addEventListener("click", () => {
-      info.toggleClass(
-        "chs-bookinfo-collapsed",
-        !info.hasClass("chs-bookinfo-collapsed")
-      );
-      updateToggleLabel();
-    });
-    const panel = info.createDiv("chs-bookinfo-panel");
-    this.makeField(panel, "\u4F5C\u8005", book.bookInfo.author, (v) => {
+    this.makeField(info, "\u4F5C\u8005", book.bookInfo.author, (v) => {
       book.bookInfo.author = v;
       this.scheduleSave();
     });
-    this.makeField(panel, "\u6210\u7EE9", book.bookInfo.score, (v) => {
+    this.makeField(info, "\u6210\u7EE9", book.bookInfo.score, (v) => {
       book.bookInfo.score = v;
       this.scheduleSave();
     });
     this.buildChipField(
-      panel,
+      info,
       "\u5206\u7C7B",
       () => book.bookInfo.category,
       (vals) => {
@@ -1756,7 +1768,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
       }
     );
     this.buildChipField(
-      panel,
+      info,
       "\u6807\u7B7E",
       () => book.bookInfo.tags,
       (vals) => {
@@ -1764,7 +1776,7 @@ var ChaiShuMatrixView = class extends import_obsidian3.ItemView {
         this.scheduleSave();
       }
     );
-    const actions = panel.createDiv("chs-bookinfo-actions");
+    const actions = info.createDiv("chs-bookinfo-actions");
     const charBtn = actions.createEl("button", { text: "\u{1F3AD} \u4EBA\u8BBE\u62C6\u89E3", cls: "chs-btn" });
     charBtn.addEventListener("click", () => void this.plugin.openCharacterView(book.id));
     const searchBtn = actions.createEl("button", { text: "\u{1F50D} \u5168\u5C40\u67E5\u8BE2", cls: "chs-btn" });
@@ -3137,7 +3149,7 @@ function relColor(type) {
   return `hsl(${h % 360}, 62%, 52%)`;
 }
 var REL_KEYWORDS = [
-  { type: "\u4EC7\u4EBA", words: ["\u6DF1\u4EC7", "\u6B7B\u5BF9\u5934", "\u7ED3\u6028", "\u7ED3\u4EC7", "\u4EC7\u4EBA", "\u654C\u5BF9", "\u5BBF\u654C", "\u4EC7", "\u6068", "\u654C"] },
+  { type: "\u4EC7\u4EBA", words: ["\u6DF1\u4EC7", "\u6B7B\u5BF9\u5934", "\u7ED3\u6028", "\u7ED3\u4EC7", "\u4EC7\u4EBA", "\u654C\u5BF9", "\u5BBF\u654C", "\u4EC7", "\u6068", "\u654C", "\u6740"] },
   { type: "\u604B\u4EBA", words: ["\u604B\u4EBA", "\u60C5\u4FA3", "\u76F8\u604B", "\u7231\u6155", "\u559C\u6B22", "\u7231"] },
   { type: "\u76DF\u53CB", words: ["\u76DF\u53CB", "\u540C\u76DF", "\u7ED3\u76DF", "\u4F19\u4F34", "\u631A\u53CB", "\u670B\u53CB", "\u53CB"] },
   { type: "\u5E08\u5F92", words: ["\u5E08\u5F92", "\u5E08\u7236", "\u5F92\u5F1F", "\u62DC\u5E08", "\u5E08"] },
@@ -3172,6 +3184,8 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     this.graphLinkFrom = null;
     this.graphPointers = /* @__PURE__ */ new Map();
     this.graphPinchDist = 0;
+    this.graphDownX = 0;
+    this.graphDownY = 0;
     // V2.4: bidirectional feedback — character id → related characters (id + type).
     this.relatedMap = /* @__PURE__ */ new Map();
     this.plugin = plugin;
@@ -3229,7 +3243,7 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     });
     tableBtn.addEventListener("click", () => this.setViewMode("table"));
     const graphBtn = seg.createEl("button", {
-      text: "\u5173\u7CFB\u56FE\u8C31",
+      text: "\u{1F578}\uFE0F \u5173\u7CFB\u56FE\u8C31",
       cls: "chs-btn chs-btn-sm" + (this.viewMode === "graph" ? " chs-btn-primary" : "")
     });
     graphBtn.addEventListener("click", () => this.setViewMode("graph"));
@@ -4077,11 +4091,23 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
       const pa = this.toScreen(a.x, a.y);
       const pb = this.toScreen(b.x, b.y);
       const focused = this.graphFocusId && (e.from === this.graphFocusId || e.to === this.graphFocusId);
+      const ca = charById.get(e.from);
+      const cb = charById.get(e.to);
+      const hostile = e.type === "\u4EC7\u4EBA" || /仇|恨|敌|杀/.test(e.type);
+      const sameFaction = !!ca && !!cb && !!ca.factionId && ca.factionId === cb.factionId;
       ctx.beginPath();
       ctx.moveTo(pa.x, pa.y);
       ctx.lineTo(pb.x, pb.y);
-      if (e.explicit) {
-        ctx.strokeStyle = this.graphColorMode === "relation" ? relColor(e.type) : relColor(e.type);
+      if (hostile) {
+        ctx.strokeStyle = "#ef4444";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+      } else if (sameFaction) {
+        ctx.strokeStyle = "#22c55e";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+      } else if (e.explicit) {
+        ctx.strokeStyle = relColor(e.type);
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
       } else {
@@ -4161,6 +4187,8 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
       return;
     }
     const hit = this.hitTestNode(sx, sy);
+    this.graphDownX = sx;
+    this.graphDownY = sy;
     if (hit) {
       this.graphDragId = hit;
       this.graphLinkFrom = hit;
@@ -4221,8 +4249,13 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
         this.promptRelationship(from, to);
         return;
       }
+      const moved = Math.hypot(sx - this.graphDownX, sy - this.graphDownY);
+      const clickedId = this.graphDragId;
       this.graphDragId = null;
       this.graphLinkFrom = null;
+      if (moved < 6) {
+        this.showCharacterInfo(clickedId);
+      }
     } else {
       if (!this.graphDragId && Math.abs(e.movementX) < 2 && Math.abs(e.movementY) < 2) {
         const hit = this.hitTestNode(sx, sy);
@@ -4244,6 +4277,29 @@ var ChaiShuCharacterView = class extends import_obsidian4.ItemView {
     const H = ((_b = this.graphCanvas) == null ? void 0 : _b.clientHeight) || 480;
     this.graphPan.x = sx - W / 2 - worldBefore.x * this.graphZoom;
     this.graphPan.y = sy - H / 2 - worldBefore.y * this.graphZoom;
+  }
+  // V2.7: show character basic-info popup when a graph node is clicked.
+  showCharacterInfo(charId) {
+    var _a, _b;
+    const book = this.book;
+    if (!book) return;
+    const char = book.characters.find((c) => c.id === charId);
+    if (!char) return;
+    const faction = book.factions.find((f) => f.id === char.factionId);
+    const related = [];
+    for (const e of this.graphEdges) {
+      if (e.from === charId || e.to === charId) {
+        const otherId = e.from === charId ? e.to : e.from;
+        const other = book.characters.find((c) => c.id === otherId);
+        if (other) related.push({ name: other.name, type: e.type });
+      }
+    }
+    new CharacterInfoModal(this.app, {
+      name: char.name,
+      factionName: (_a = faction == null ? void 0 : faction.name) != null ? _a : "\u672A\u5206\u914D\u9635\u8425",
+      factionColor: (_b = faction == null ? void 0 : faction.color) != null ? _b : "#8b9bb4",
+      related
+    }).open();
   }
   promptRelationship(from, to) {
     const book = this.book;

@@ -95,6 +95,47 @@ export class PromptModal extends Modal {
   }
 }
 
+// V2.7: character basic-info preview shown when clicking a graph node.
+export class CharacterInfoModal extends Modal {
+  constructor(
+    app: App,
+    private opts: {
+      name: string;
+      factionName: string;
+      factionColor: string;
+      related: Array<{ name: string; type: string }>;
+    }
+  ) {
+    super(app);
+  }
+
+  onOpen(): void {
+    this.contentEl.addClass("chs-modal", "chs-char-info");
+    this.contentEl.createEl("h2", { text: this.opts.name });
+
+    const factionRow = this.contentEl.createDiv("chs-char-info-row");
+    factionRow.createSpan("chs-char-info-label").setText("阵营");
+    const dot = factionRow.createSpan("chs-char-info-dot");
+    dot.style.backgroundColor = this.opts.factionColor;
+    factionRow.createSpan("chs-char-info-value").setText(this.opts.factionName);
+
+    this.contentEl.createDiv("chs-char-info-sub").setText("关联角色");
+    if (this.opts.related.length === 0) {
+      this.contentEl.createDiv("chs-char-info-empty").setText("暂无关联");
+    } else {
+      for (const r of this.opts.related) {
+        const row = this.contentEl.createDiv("chs-char-info-rel");
+        row.createSpan("chs-char-info-rel-name").setText(r.name);
+        row.createSpan("chs-char-info-rel-type").setText(r.type);
+      }
+    }
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
 export class BookCreateModal extends Modal {
   private title = "";
   private author = "";

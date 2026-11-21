@@ -118,30 +118,8 @@
   padding-bottom: 2px;
 }
 
-/* V2.3/V2.4: 展开/收起信息 toggle — hidden on desktop, shown only on mobile. */
-.chs-bookinfo-toggle {
-  display: none;
-}
-
-/* V2.4: collapsible panel holding 作者/成绩/分类/标签 + 操作按钮. */
-.chs-bookinfo-panel {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-}
-
-.chs-bookinfo-panel .chs-field,
-.chs-bookinfo-panel .chs-field-chips {
-  flex: 1 1 240px;
-  min-width: 0;
-}
-
-.chs-bookinfo-panel .chs-bookinfo-actions {
-  width: 100%;
-  flex-wrap: wrap;
-}
+/* V2.7: flat compact header — fields are direct children laid out in a wrapping
+   flex row on desktop, and a 2-column grid on mobile (see the media query). */
 
 /* --------------------------------------------------------------- inputs */
 .chs-input {
@@ -861,6 +839,66 @@ tr.chs-drop-root {
   border-radius: 8px;
 }
 
+/* V2.7: character info popup (clicked graph node). */
+.chs-char-info {
+  min-width: 240px;
+}
+
+.chs-char-info-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chs-char-info-label {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.chs-char-info-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.chs-char-info-value {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.chs-char-info-sub {
+  margin: 12px 0 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.chs-char-info-empty {
+  color: var(--text-faint);
+  font-size: 13px;
+}
+
+.chs-char-info-rel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.chs-char-info-rel-name {
+  font-size: 14px;
+}
+
+.chs-char-info-rel-type {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--background-modifier-hover);
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
 .chs-swatches {
   display: flex;
   flex-wrap: wrap;
@@ -1028,51 +1066,32 @@ tr.chs-drop-root {
     --chs-col-w: 120px;
   }
 
-  /* V2.3: full-width fields + collapse panel (default shows only 书名 + toggle). */
+  /* V2.7: compact 2-column grid — 书名 full-width, then 作者/成绩 + 分类/标签 two-per-row.
+     No collapse panel: everything is always visible, no huge blank gap. */
   .chs-bookinfo {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 8px;
+    align-items: end;
   }
 
-  .chs-field,
-  .chs-field-chips {
-    flex: 1 1 100%;
-    width: 100%;
+  .chs-bookinfo .chs-field,
+  .chs-bookinfo .chs-field-chips {
     min-width: 0;
+    width: 100%;
+  }
+
+  /* 拆书名称 (first field) spans both columns. */
+  .chs-bookinfo > .chs-field:first-child {
+    grid-column: 1 / -1;
   }
 
   .chs-field-label {
     display: block;
   }
 
-  .chs-bookinfo-toggle {
-    display: inline-flex;
-    align-self: stretch;
-    width: 100%;
-    justify-content: center;
-    gap: 4px;
-  }
-
-  /* V2.5: fields VISIBLE by default (no display:none on load); collapse is opt-in. */
-  .chs-bookinfo-panel {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .chs-bookinfo.chs-bookinfo-collapsed .chs-bookinfo-panel {
-    display: none;
-  }
-
-  .chs-bookinfo-panel .chs-field,
-  .chs-bookinfo-panel .chs-field-chips {
-    flex: 1 1 auto;
-    width: 100%;
-  }
-
   .chs-bookinfo-actions {
+    grid-column: 1 / -1;
     width: 100%;
     flex-wrap: wrap;
   }

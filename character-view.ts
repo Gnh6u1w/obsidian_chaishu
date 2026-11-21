@@ -15,7 +15,7 @@ import {
   sanitizeFileName,
   uid,
 } from "./store";
-import { ConfirmModal, DimensionModal, PromptModal } from "./modals";
+import { CharacterInfoModal, ConfirmModal, DimensionModal, PromptModal } from "./modals";
 
 const MAX_PREVIEW = 200;
 
@@ -47,7 +47,7 @@ function relColor(type: string): string {
 // V2.4: relationship-type keywords (matched against 拆书 chapter-note text).
 // Order matters — more specific phrases are checked before single characters.
 const REL_KEYWORDS: Array<{ type: string; words: string[] }> = [
-  { type: "仇人", words: ["深仇", "死对头", "结怨", "结仇", "仇人", "敌对", "宿敌", "仇", "恨", "敌"] },
+  { type: "仇人", words: ["深仇", "死对头", "结怨", "结仇", "仇人", "敌对", "宿敌", "仇", "恨", "敌", "杀"] },
   { type: "恋人", words: ["恋人", "情侣", "相恋", "爱慕", "喜欢", "爱"] },
   { type: "盟友", words: ["盟友", "同盟", "结盟", "伙伴", "挚友", "朋友", "友"] },
   { type: "师徒", words: ["师徒", "师父", "徒弟", "拜师", "师"] },
@@ -97,6 +97,8 @@ export class ChaiShuCharacterView extends ItemView {
   private graphLinkFrom: string | null = null;
   private graphPointers = new Map<number, { x: number; y: number }>();
   private graphPinchDist = 0;
+  private graphDownX = 0;
+  private graphDownY = 0;
 
   // V2.4: bidirectional feedback — character id → related characters (id + type).
   private relatedMap = new Map<string, Array<{ id: string; type: string }>>();
@@ -169,7 +171,7 @@ export class ChaiShuCharacterView extends ItemView {
     });
     tableBtn.addEventListener("click", () => this.setViewMode("table"));
     const graphBtn = seg.createEl("button", {
-      text: "关系图谱",
+      text: "🕸️ 关系图谱",
       cls: "chs-btn chs-btn-sm" + (this.viewMode === "graph" ? " chs-btn-primary" : ""),
     });
     graphBtn.addEventListener("click", () => this.setViewMode("graph"));
@@ -1116,11 +1118,24 @@ export class ChaiShuCharacterView extends ItemView {
       const pa = this.toScreen(a.x, a.y);
       const pb = this.toScreen(b.x, b.y);
       const focused = this.graphFocusId && (e.from === this.graphFocusId || e.to === this.graphFocusId);
+      // V2.7: 敌对 → red dashed; 同阵营 → green solid; else keep existing logic.
+      const ca = charById.get(e.from);
+      const cb = charById.get(e.to);
+      const hostile = e.type === "仇人" || /仇|恨|敌|杀/.test(e.type);
+      const sameFaction = !!ca && !!cb && !!ca.factionId && ca.factionId === cb.factionId;
       ctx.beginPath();
       ctx.moveTo(pa.x, pa.y);
       ctx.lineTo(pb.x, pb.y);
-      if (e.explicit) {
-        ctx.strokeStyle = this.graphColorMode === "relation" ? relColor(e.type) : relColor(e.type);
+      if (hostile) {
+        ctx.strokeStyle = "#ef4444";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+      } else if (sameFaction) {
+        ctx.strokeStyle = "#22c55e";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+      } else if (e.explicit) {
+        ctx.strokeStyle = relColor(e.type);
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
       } else {
@@ -1211,6 +1226,8 @@ export class ChaiShuCharacterView extends ItemView {
     }
 
     const hit = this.hitTestNode(sx, sy);
+    this.graphDownX = sx;
+    this.graphDownY = sy;
     if (hit) {
       this.graphDragId = hit;
       this.graphLinkFrom = hit;
@@ -1281,8 +1298,14 @@ export class ChaiShuCharacterView extends ItemView {
         this.promptRelationship(from, to);
         return;
       }
+      // V2.7: a click (no significant drag) on a node → show character info popup.
+      const moved = Math.hypot(sx - this.graphDownX, sy - this.graphDownY);
+      const clickedId = this.graphDragId;
       this.graphDragId = null;
       this.graphLinkFrom = null;
+      if (moved < 6) {
+        this.showCharacterInfo(clickedId);
+      }
     } else {
       // click empty space → clear focus
       if (!this.graphDragId && Math.abs(e.movementX) < 2 && Math.abs(e.movementY) < 2) {
@@ -1306,6 +1329,29 @@ export class ChaiShuCharacterView extends ItemView {
     const H = this.graphCanvas?.clientHeight || 480;
     this.graphPan.x = sx - W / 2 - worldBefore.x * this.graphZoom;
     this.graphPan.y = sy - H / 2 - worldBefore.y * this.graphZoom;
+  }
+
+  // V2.7: show character basic-info popup when a graph node is clicked.
+  private showCharacterInfo(charId: string): void {
+    const book = this.book;
+    if (!book) return;
+    const char = book.characters.find((c) => c.id === charId);
+    if (!char) return;
+    const faction = book.factions.find((f) => f.id === char.factionId);
+    const related: Array<{ name: string; type: string }> = [];
+    for (const e of this.graphEdges) {
+      if (e.from === charId || e.to === charId) {
+        const otherId = e.from === charId ? e.to : e.from;
+        const other = book.characters.find((c) => c.id === otherId);
+        if (other) related.push({ name: other.name, type: e.type });
+      }
+    }
+    new CharacterInfoModal(this.app, {
+      name: char.name,
+      factionName: faction?.name ?? "未分配阵营",
+      factionColor: faction?.color ?? "#8b9bb4",
+      related,
+    }).open();
   }
 
   private promptRelationship(from: string, to: string): void {

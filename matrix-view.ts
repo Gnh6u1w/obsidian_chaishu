@@ -347,40 +347,21 @@ export class ChaiShuMatrixView extends ItemView {
       this.scheduleSave();
     });
 
-    // V2.5: mobile header — 作者/成绩/分类/标签 + 操作按钮 are VISIBLE by default
-    // (red line: no feature may be silently display:none'd on load). A full-width
-    // toggle lets the user COLLAPSE them for more space.
-    const toggle = info.createEl("button", { cls: "chs-btn chs-bookinfo-toggle" });
-    toggle.setAttribute("type", "button");
-    const updateToggleLabel = () => {
-      toggle.setText(
-        info.hasClass("chs-bookinfo-collapsed")
-          ? "▸ 展开信息与操作（作者/成绩/分类/标签/人设/查询）"
-          : "▾ 收起信息与操作"
-      );
-    };
-    updateToggleLabel();
-    toggle.addEventListener("click", () => {
-      info.toggleClass(
-        "chs-bookinfo-collapsed",
-        !info.hasClass("chs-bookinfo-collapsed")
-      );
-      updateToggleLabel();
-    });
-
-    const panel = info.createDiv("chs-bookinfo-panel");
-    this.makeField(panel, "作者", book.bookInfo.author, (v) => {
+    // V2.7: flat compact grid — 书名 full-width, then 作者/成绩 + 分类/标签 two-per-row.
+    // No collapse panel (was hard to use); everything is always visible, laid out
+    // in a 2-column grid on mobile so it fits without a huge blank gap.
+    this.makeField(info, "作者", book.bookInfo.author, (v) => {
       book.bookInfo.author = v;
       this.scheduleSave();
     });
-    this.makeField(panel, "成绩", book.bookInfo.score, (v) => {
+    this.makeField(info, "成绩", book.bookInfo.score, (v) => {
       book.bookInfo.score = v;
       this.scheduleSave();
     });
 
     // V2.1: 分类 (multi, custom) + 标签 (multi, free input).
     this.buildChipField(
-      panel,
+      info,
       "分类",
       () => book.bookInfo.category,
       (vals) => {
@@ -389,7 +370,7 @@ export class ChaiShuMatrixView extends ItemView {
       }
     );
     this.buildChipField(
-      panel,
+      info,
       "标签",
       () => book.bookInfo.tags,
       (vals) => {
@@ -398,7 +379,7 @@ export class ChaiShuMatrixView extends ItemView {
       }
     );
 
-    const actions = panel.createDiv("chs-bookinfo-actions");
+    const actions = info.createDiv("chs-bookinfo-actions");
     const charBtn = actions.createEl("button", { text: "🎭 人设拆解", cls: "chs-btn" });
     charBtn.addEventListener("click", () => void this.plugin.openCharacterView(book.id));
     const searchBtn = actions.createEl("button", { text: "🔍 全局查询", cls: "chs-btn" });
